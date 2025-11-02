@@ -1,0 +1,7 @@
+flask
+gunicorn
+python-dotenv
+openai>=1.50.0
+PyPDF2
+python-docx
+werkzeug
