@@ -1,7 +1,8 @@
 flask
 gunicorn
 python-dotenv
-openai>=1.50.0
+openai
 PyPDF2
 python-docx
 werkzeug
+
