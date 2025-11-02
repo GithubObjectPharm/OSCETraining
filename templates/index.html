@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en-CA">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PharmacyPrep AI Patient Simulator</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+
+    :root {
+      --bg1: #ffffff;
+      --bg2: #f4f4f4;
+      --glass: rgba(200, 200, 200, .25);
+      --glass-strong: rgba(255, 255, 255, .6);
+      --border: rgba(0, 0, 0, .15);
+      --text: #000;
+      --muted: #333;
+      --btn-grad: linear-gradient(135deg, #111, #444);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; zoom: 0.96; }
+
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(120deg, var(--bg1) 0%, var(--bg2) 100%);
+      background-attachment: fixed;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    header { text-align: center; margin: 38px 16px 8px; }
+    header h1 { margin: 0 0 6px; font-size: clamp(1.6rem, 2.4vw, 2.2rem); font-weight: 700; color: #000; }
+    header p { margin: 0; color: var(--muted); font-size: .98rem; }
+
+    main {
+      width: min(96%, 980px);
+      margin: 18px auto 28px;
+      background: var(--glass);
+      backdrop-filter: blur(18px);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, .12);
+      padding: clamp(16px, 2vw, 28px);
+    }
+
+    .controls { display: grid; grid-template-columns: 1fr 160px; gap: 14px; align-items: stretch; }
+
+    .upload {
+      border: 2px dashed rgba(0, 0, 0, .3);
+      border-radius: 14px;
+      padding: 16px 18px;
+      background: rgba(255, 255, 255, .6);
+      text-align: center;
+      cursor: pointer;
+      transition: .25s ease;
+      user-select: none;
+      color: #000;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .upload:hover { background: rgba(255, 255, 255, .9); border-color: rgba(0, 0, 0, .6); }
+    .upload small { display: block; color: #555; margin-top: 2px; }
+    input[type="file"] { display: none !important; }
+
+    .btn {
+      background: var(--btn-grad);
+      border: none;
+      color: #fff;
+      border-radius: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+      transition: .2s transform ease;
+      white-space: nowrap;
+      height: 100%;
+      font-size: 1rem;
+    }
+    .btn:hover { transform: translateY(-1.5px); }
+
+    /* ---------- Disabled State Enhancements ---------- */
+    #micBtn:disabled,
+    .btn:disabled,
+    #sendBtn:disabled {
+      opacity: 0.55 !important;
+      cursor: not-allowed !important;
+      pointer-events: auto !important; /* allow hover to show not-allowed cursor */
+    }
+
+    #micBtn:disabled:hover,
+    .btn:disabled:hover,
+    #sendBtn:disabled:hover {
+      opacity: 0.55 !important;
+    }
+
+    .status { margin-top: 10px; color: #000; min-height: 20px; }
+
+    /* Session Button */
+    .mic-bar { margin-top: 0; margin-bottom: 0; text-align: center; }
+
+    #micBtn {
+      width: 100%; height: 86px;
+      background: linear-gradient(90deg, #000, #333);
+      color: #fff; font-weight: 700; font-size: 1.15rem;
+      border: none; border-radius: 14px; cursor: pointer;
+      box-shadow: 0 6px 22px rgba(0, 0, 0, .25);
+      transition: all .2s ease; margin-top: 12px;
+    }
+
+    #micBtn.active { background: linear-gradient(90deg, #ff1744, #ff9100); animation: pulse 1.2s infinite; }
+    #micBtn.speaking { background: linear-gradient(90deg, #ff8a00, #ff1744); }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.4); }
+      70% { box-shadow: 0 0 0 14px rgba(255, 0, 0, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0); }
+    }
+
+    .chat {
+      margin-top: 12px; background: var(--glass-strong);
+      border: 1px solid var(--border); border-radius: 18px;
+      height: 460px; overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+
+    .messages { padding: 16px; overflow-y: auto; flex: 1 1 auto; scroll-behavior: smooth; }
+    .msg { display: flex; margin: 10px 0; }
+    .msg.user { justify-content: flex-end; }
+    .msg.ai { justify-content: flex-start; }
+
+    .bubble {
+      max-width: min(76%, 560px); padding: 10px 14px;
+      border-radius: 14px; line-height: 1.45;
+      background: rgba(0, 0, 0, .9); color: #fff;
+      box-shadow: 0 3px 12px rgba(0, 0, 0, .18);
+      white-space: pre-wrap; word-wrap: break-word;
+      font-size: 1rem;
+    }
+
+    .msg.user .bubble {
+      background: #f2f2f2; color: #000;
+      box-shadow: 0 3px 12px rgba(0, 0, 0, .15);
+    }
+
+    .input-row { display: flex; gap: 10px; padding: 12px; border-top: 1px solid var(--border); background: rgba(255, 255, 255, .8); }
+    #userInput { flex: 1; border: none; outline: none; border-radius: 12px; padding: 12px 14px; font-size: 1rem; color: #000; background: #fff; }
+    #sendBtn { padding: 12px 18px; }
+
+    footer { text-align: center; color: #444; font-size: .92rem; margin: 8px 16px 26px; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>PharmacyPrep AI Patient Simulator</h1>
+    <p>Practice patient interviewing and assessment in real time.</p>
+  </header>
+
+  <main>
+    <div class="controls">
+      <label class="upload" for="caseFile">
+        <strong>Upload a Case Scenario File</strong>
+        <small>(PDF, TXT, or DOCX)</small>
+      </label>
+      <button class="btn" id="resetBtn">New Case</button>
+      <input id="caseFile" type="file" accept=".pdf,.txt,.docx">
+    </div>
+
+    <div id="status" class="status"></div>
+
+    <div class="mic-bar">
+      <button id="micBtn">🎙️ Start Pharmacy Session</button>
+    </div>
+
+    <section class="chat">
+      <div id="messages" class="messages"></div>
+      <div class="input-row">
+        <input id="userInput" type="text" placeholder="Ask the patient a question…">
+        <button id="sendBtn" class="btn">Send</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>© 2025 PharmacyPrep | AI-Driven OSCE Training Platform</footer>
+
+<script>
+const fileInput = document.getElementById('caseFile');
+const statusEl  = document.getElementById('status');
+const messages  = document.getElementById('messages');
+const input     = document.getElementById('userInput');
+const sendBtn   = document.getElementById('sendBtn');
+const resetBtn  = document.getElementById('resetBtn');
+const micBtn    = document.getElementById('micBtn');
+
+let recognition;
+let sessionActive = false;
+let isSpeaking = false;
+let fileUploaded = false; // 🔒 NEW flag
+
+statusEl.textContent = '📄 Please upload a file to begin.';
+
+// disable all controls initially
+input.disabled = true;
+sendBtn.disabled = true;
+micBtn.disabled = true;
+micBtn.style.opacity = '0.5';
+sendBtn.style.opacity = '0.6';
+
+function scrollToBottom(){ messages.scrollTop = messages.scrollHeight; }
+function addBubble(sender, text){
+  const wrap=document.createElement('div');
+  wrap.className='msg '+sender;
+  wrap.innerHTML=`<div class="bubble">${text}</div>`;
+  messages.appendChild(wrap); scrollToBottom();
+}
+
+function disableSessionControls() {
+  input.disabled = true;
+  sendBtn.disabled = true;
+  micBtn.disabled = true;
+}
+
+function enableSessionControls() {
+  input.disabled = false;
+  sendBtn.disabled = false;
+  micBtn.disabled = false;
+}
+
+
+/* --------- Upload Case ---------- */
+fileInput.addEventListener('change', async e=>{
+  const file=e.target.files[0];
+  if(!file){ statusEl.textContent='📄 Please upload a file to begin.'; return; }
+  statusEl.textContent='🧠 Uploading and reading case…';
+  const fd=new FormData(); fd.append('file',file);
+  try{
+    const res=await fetch('/upload',{method:'POST',body:fd});
+    const data=await res.json();
+    if(data.error){ statusEl.textContent='❌ '+data.error; return; }
+    statusEl.textContent='✅ Case ready. The AI has assumed the patient role.';
+    fileUploaded = true;
+    enableSessionControls(); // ✅ unlocks input + mic
+    addBubble('ai','Case uploaded successfully. You may begin asking questions.');
+  }catch{ statusEl.textContent='❌ Upload failed.'; }
+});
+
+/* ---------- TTS (Flicker-free) ---------- */
+function playVoice(text) {
+  if (isSpeaking) return;
+  isSpeaking = true;
+  fetch('/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text })
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (!d.audio) { isSpeaking = false; return; }
+
+    const audio = new Audio(d.audio);
+    if (recognition) recognition.stop();
+    micBtn.classList.remove('active');
+    micBtn.classList.add('speaking');
+    micBtn.textContent = '🎙️ Speaking...';
+    micBtn.style.transition = 'background 0.25s ease';
+    micBtn.style.background = 'linear-gradient(90deg, #ff8a00, #ff1744)';
+    audio.play();
+
+    audio.onended = () => {
+      isSpeaking = false;
+      micBtn.classList.remove('speaking');
+      micBtn.style.transition = '';
+      if (sessionActive) {
+        micBtn.classList.add('active');
+        micBtn.textContent = '🎧 Listening...';
+        recognition.start();
+      } else {
+        micBtn.classList.remove('active');
+        micBtn.textContent = '🎙️ Start Pharmacy Session';
+        micBtn.style.background = 'linear-gradient(90deg, #000, #333)';
+      }
+    };
+  })
+  .catch(() => { isSpeaking = false; });
+}
+
+/* ---------- Send Question ---------- */
+async function sendQuestion(text){
+  if (!fileUploaded) return; // ignore if not ready
+  const question=text||input.value.trim();
+  if(!question) return;
+  addBubble('user',question);
+  input.value='';
+  try{
+    const res=await fetch('/ask',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({question})
+    });
+    const data=await res.json();
+    if(data.error){ addBubble('ai','(Error) '+data.error); return; }
+    addBubble('ai',data.answer);
+    playVoice(data.answer);
+  }catch{ addBubble('ai','(Network error)'); }
+}
+sendBtn.addEventListener('click',()=>sendQuestion());
+input.addEventListener('keydown',e=>{if(e.key==='Enter')sendQuestion();});
+
+/* ---------- Reset Case ---------- */
+resetBtn.addEventListener('click', async ()=>{
+  stopPharmacySession();
+  await fetch('/reset-case',{method:'POST'});
+  messages.innerHTML='';
+  fileInput.value=''; input.value='';
+  fileUploaded = false;
+  disableSessionControls(); // ✅ relock all
+  statusEl.textContent='📄 Please upload a file to begin.';
+  addBubble('ai','🆕 New session started. Upload a case to begin.');
+});
+
+/* ---------- Speech Recognition ---------- */
+function startPharmacySession() {
+  if (!fileUploaded) return;
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    alert('Speech recognition not supported');
+    return;
+  }
+
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-US';
+  recognition.interimResults = false;
+
+  recognition.onstart = () => {
+    micBtn.classList.add('active');
+    micBtn.textContent = '🎧 Listening...';
+  };
+
+  recognition.onresult = (e) => {
+    const spoken = e.results[0][0].transcript.trim();
+    sendQuestion(spoken);
+  };
+
+  recognition.onend = () => {
+    if (sessionActive && !isSpeaking) {
+      micBtn.classList.add('active');
+      micBtn.textContent = '🎧 Listening...';
+      recognition.start();
+    } else if (!sessionActive) {
+      micBtn.classList.remove('active');
+      micBtn.textContent = '🎙️ Start Pharmacy Session';
+    }
+  };
+
+  recognition.onerror = () => {
+    micBtn.classList.remove('active');
+    micBtn.textContent = '🎙️ Start Pharmacy Session';
+  };
+
+  recognition.start();
+  micBtn.classList.add('active');
+  micBtn.textContent = '🎧 Listening...';
+}
+
+function stopPharmacySession() {
+  sessionActive = false;
+  if (recognition) recognition.stop();
+  micBtn.classList.remove('active', 'speaking');
+  micBtn.textContent = '🎙️ Start Pharmacy Session';
+}
+
+/* ---------- Button Controls ---------- */
+micBtn.addEventListener('click',()=>{
+  if (!fileUploaded) return;
+  sessionActive=!sessionActive;
+  if(sessionActive) startPharmacySession();
+  else stopPharmacySession();
+});
+
+/* ---------- Welcome ---------- */
+addBubble('ai','Welcome! Upload a case scenario and then ask me patient questions (e.g., age, medications, allergies).');
+</script>
+
+</body>
+</html>
