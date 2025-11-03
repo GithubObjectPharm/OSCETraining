@@ -11,9 +11,11 @@ app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = "uploads"
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
-client = OpenAI(
-    api_key="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"
-)
+from dotenv import load_dotenv
+load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+print("Key loaded:", bool(os.getenv("OPENAI_API_KEY")))
+
 
 # -------------------- Global Case / Conversation State --------------------
 
