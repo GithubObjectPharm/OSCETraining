@@ -229,16 +229,15 @@ const micBtn    = document.getElementById('micBtn');
 let recognition;
 let sessionActive = false;
 let isSpeaking = false;
-let fileUploaded = false; // 🔒 NEW flag
+let fileUploaded = false;
+let locked = false; // 🔒 NEW: prevents overlapping replies
 
 statusEl.textContent = '📄 Please upload a file to begin.';
 
-// disable all controls initially
+// Disable all controls initially
 input.disabled = true;
 sendBtn.disabled = true;
 micBtn.disabled = true;
-micBtn.style.filter = 'brightness(0.9)';
-sendBtn.style.opacity = '0.6';
 
 function scrollToBottom(){ messages.scrollTop = messages.scrollHeight; }
 function addBubble(sender, text){
@@ -260,7 +259,6 @@ function enableSessionControls() {
   micBtn.disabled = false;
 }
 
-
 /* --------- Upload Case ---------- */
 fileInput.addEventListener('change', async e=>{
   const file=e.target.files[0];
@@ -273,12 +271,12 @@ fileInput.addEventListener('change', async e=>{
     if(data.error){ statusEl.textContent='❌ '+data.error; return; }
     statusEl.textContent='✅ Case ready. The AI has assumed the patient role.';
     fileUploaded = true;
-    enableSessionControls(); // ✅ unlocks input + mic
+    enableSessionControls();
     addBubble('ai','Case uploaded successfully. You may begin asking questions.');
   }catch{ statusEl.textContent='❌ Upload failed.'; }
 });
 
-/* ---------- TTS (Flicker-free) ---------- */
+/* ---------- TTS ---------- */
 function playVoice(text) {
   if (isSpeaking) return;
   isSpeaking = true;
@@ -289,40 +287,37 @@ function playVoice(text) {
   })
   .then(r => r.json())
   .then(d => {
-    if (!d.audio) { isSpeaking = false; return; }
-
+    if (!d.audio) { isSpeaking = false; locked = false; return; }
     const audio = new Audio(d.audio);
-    if (recognition) recognition.stop();
+
+    // Show speaking state
     micBtn.classList.remove('active');
     micBtn.classList.add('speaking');
     micBtn.textContent = '🎙️ Speaking...';
-    micBtn.style.transition = 'background 0.25s ease';
     micBtn.style.background = 'linear-gradient(90deg, #ff8a00, #ff1744)';
+
     audio.play();
 
     audio.onended = () => {
       isSpeaking = false;
+      locked = false; // ✅ Unlock only after AI finishes speaking
       micBtn.classList.remove('speaking');
-      micBtn.style.transition = '';
-      if (sessionActive) {
-        micBtn.classList.add('active');
-        micBtn.textContent = '🎧 Listening...';
-        recognition.start();
-      } else {
-        micBtn.classList.remove('active');
-        micBtn.textContent = '🎙️ Start Pharmacy Session';
-        micBtn.style.background = 'linear-gradient(90deg, #000, #333)';
-      }
+      micBtn.classList.add('active');
+      micBtn.textContent = '🎧 Listening...';
+      micBtn.style.background = 'linear-gradient(90deg, #ff1744, #ff9100)';
+
+      if (sessionActive && recognition) recognition.start();
     };
   })
-  .catch(() => { isSpeaking = false; });
+  .catch(() => { isSpeaking = false; locked = false; });
 }
 
 /* ---------- Send Question ---------- */
 async function sendQuestion(text){
-  if (!fileUploaded) return; // ignore if not ready
+  if (!fileUploaded || locked) return; // ✅ ignore if busy
   const question=text||input.value.trim();
   if(!question) return;
+  locked = true; // 🔒 Lock before sending
   addBubble('user',question);
   input.value='';
   try{
@@ -332,10 +327,10 @@ async function sendQuestion(text){
       body:JSON.stringify({question})
     });
     const data=await res.json();
-    if(data.error){ addBubble('ai','(Error) '+data.error); return; }
+    if(data.error){ addBubble('ai','(Error) '+data.error); locked=false; return; }
     addBubble('ai',data.answer);
     playVoice(data.answer);
-  }catch{ addBubble('ai','(Network error)'); }
+  }catch{ addBubble('ai','(Network error)'); locked=false; }
 }
 sendBtn.addEventListener('click',()=>sendQuestion());
 input.addEventListener('keydown',e=>{if(e.key==='Enter')sendQuestion();});
@@ -347,7 +342,7 @@ resetBtn.addEventListener('click', async ()=>{
   messages.innerHTML='';
   fileInput.value=''; input.value='';
   fileUploaded = false;
-  disableSessionControls(); // ✅ relock all
+  disableSessionControls();
   statusEl.textContent='📄 Please upload a file to begin.';
   addBubble('ai','🆕 New session started. Upload a case to begin.');
 });
@@ -368,72 +363,21 @@ function startPharmacySession() {
   recognition.onstart = () => {
     micBtn.classList.add('active');
     micBtn.textContent = '🎧 Listening...';
+    micBtn.style.background = 'linear-gradient(90deg, #ff1744, #ff9100)';
   };
 
   recognition.onresult = (e) => {
+    if (locked) return; // ✅ ignore mid-response fragments
     const spoken = e.results[0][0].transcript.trim();
     sendQuestion(spoken);
   };
 
   recognition.onend = () => {
-    if (sessionActive && !isSpeaking) {
-      micBtn.classList.add('active');
-      micBtn.textContent = '🎧 Listening...';
-      recognition.start();
-    } else if (!sessionActive) {
-      micBtn.classList.remove('active');
-      micBtn.textContent = '🎙️ Start Pharmacy Session';
-    }
+    if (sessionActive && !isSpeaking) recognition.start();
   };
 
   recognition.onerror = () => {
-    micBtn.classList.remove('active');
-    micBtn.textContent = '🎙️ Start Pharmacy Session';
-  };
-
-  recognition.start();
-  micBtn.classList.add('active');
-  micBtn.textContent = '🎧 Listening...';
-}
-
-function startPharmacySession() {
-  if (!fileUploaded) return;
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    alert('Speech recognition not supported');
-    return;
-  }
-
-  recognition = new SpeechRecognition();
-  recognition.lang = 'en-US';
-  recognition.interimResults = false;
-
-  recognition.onstart = () => {
-    micBtn.classList.add('active');
-    micBtn.textContent = '🎧 Listening...';
-  };
-
-  recognition.onresult = (e) => {
-    const spoken = e.results[0][0].transcript.trim();
-    sendQuestion(spoken);
-  };
-
-  recognition.onend = () => {
-    if (sessionActive && !isSpeaking) {
-      micBtn.classList.add('active');
-      micBtn.textContent = '🎧 Listening...';
-      recognition.start();
-    } else {
-      micBtn.classList.remove('active', 'speaking');
-      micBtn.style.background = 'linear-gradient(90deg, #000, #333)';
-      micBtn.textContent = '🎙️ Start Pharmacy Session';
-    }
-  };
-
-  recognition.onerror = () => {
-    micBtn.classList.remove('active', 'speaking');
-    micBtn.style.background = 'linear-gradient(90deg, #000, #333)';
-    micBtn.textContent = '🎙️ Start Pharmacy Session';
+    if (!sessionActive) stopPharmacySession();
   };
 
   recognition.start();
@@ -442,19 +386,20 @@ function startPharmacySession() {
   micBtn.style.background = 'linear-gradient(90deg, #ff1744, #ff9100)';
 }
 
+/* ---------- Stop ---------- */
 function stopPharmacySession() {
   sessionActive = false;
+  locked = false;
   if (recognition) recognition.stop();
-  micBtn.classList.remove('active', 'speaking');
-  micBtn.style.background = 'linear-gradient(90deg, #000, #333)';
+  micBtn.classList.remove('active','speaking');
   micBtn.textContent = '🎙️ Start Pharmacy Session';
+  micBtn.style.background = 'linear-gradient(90deg, #000, #333)';
 }
 
-
-/* ---------- Button Controls ---------- */
+/* ---------- Toggle Button ---------- */
 micBtn.addEventListener('click',()=>{
   if (!fileUploaded) return;
-  sessionActive=!sessionActive;
+  sessionActive = !sessionActive;
   if(sessionActive) startPharmacySession();
   else stopPharmacySession();
 });
@@ -462,6 +407,5 @@ micBtn.addEventListener('click',()=>{
 /* ---------- Welcome ---------- */
 addBubble('ai','Welcome! Upload a case scenario and then ask me patient questions (e.g., age, medications, allergies).');
 </script>
-
 </body>
 </html>
