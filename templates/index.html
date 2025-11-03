@@ -103,17 +103,46 @@
     /* Session Button */
     .mic-bar { margin-top: 0; margin-bottom: 0; text-align: center; }
 
-    #micBtn {
-      width: 100%; height: 86px;
-      background: linear-gradient(90deg, #000, #333);
-      color: #fff; font-weight: 700; font-size: 1.15rem;
-      border: none; border-radius: 14px; cursor: pointer;
-      box-shadow: 0 6px 22px rgba(0, 0, 0, .25);
-      transition: all .2s ease; margin-top: 12px;
-    }
+      #micBtn {
+    width: 100%;
+    height: 86px;
+    background: linear-gradient(90deg, #000, #333);
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.15rem;
+    border: none;
+    border-radius: 14px;
+    cursor: pointer;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .25);
+    transition: all 0.25s ease;
+    margin-top: 12px;
+  }
 
-    #micBtn.active { background: linear-gradient(90deg, #ff1744, #ff9100); animation: pulse 1.2s infinite; }
-    #micBtn.speaking { background: linear-gradient(90deg, #ff8a00, #ff1744); }
+  /* Listening / Active */
+  #micBtn.active {
+    background: linear-gradient(90deg, #ff1744, #ff9100);
+    animation: pulse 1.2s infinite;
+  }
+
+  /* Speaking */
+  #micBtn.speaking {
+    background: linear-gradient(90deg, #ff8a00, #ff1744);
+  }
+
+  /* Disabled — keep full color, but no hover or clicks */
+  #micBtn:disabled {
+    cursor: not-allowed;
+    pointer-events: none;
+    filter: brightness(0.9);
+  }
+
+  /* Pulse effect */
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.4); }
+    70% { box-shadow: 0 0 0 14px rgba(255, 0, 0, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0); }
+  }
+
 
     @keyframes pulse {
       0% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.4); }
@@ -208,7 +237,7 @@ statusEl.textContent = '📄 Please upload a file to begin.';
 input.disabled = true;
 sendBtn.disabled = true;
 micBtn.disabled = true;
-micBtn.style.opacity = '0.5';
+micBtn.style.filter = 'brightness(0.9)';
 sendBtn.style.opacity = '0.6';
 
 function scrollToBottom(){ messages.scrollTop = messages.scrollHeight; }
@@ -367,12 +396,60 @@ function startPharmacySession() {
   micBtn.textContent = '🎧 Listening...';
 }
 
+function startPharmacySession() {
+  if (!fileUploaded) return;
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    alert('Speech recognition not supported');
+    return;
+  }
+
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-US';
+  recognition.interimResults = false;
+
+  recognition.onstart = () => {
+    micBtn.classList.add('active');
+    micBtn.textContent = '🎧 Listening...';
+  };
+
+  recognition.onresult = (e) => {
+    const spoken = e.results[0][0].transcript.trim();
+    sendQuestion(spoken);
+  };
+
+  recognition.onend = () => {
+    if (sessionActive && !isSpeaking) {
+      micBtn.classList.add('active');
+      micBtn.textContent = '🎧 Listening...';
+      recognition.start();
+    } else {
+      micBtn.classList.remove('active', 'speaking');
+      micBtn.style.background = 'linear-gradient(90deg, #000, #333)';
+      micBtn.textContent = '🎙️ Start Pharmacy Session';
+    }
+  };
+
+  recognition.onerror = () => {
+    micBtn.classList.remove('active', 'speaking');
+    micBtn.style.background = 'linear-gradient(90deg, #000, #333)';
+    micBtn.textContent = '🎙️ Start Pharmacy Session';
+  };
+
+  recognition.start();
+  micBtn.classList.add('active');
+  micBtn.textContent = '🎧 Listening...';
+  micBtn.style.background = 'linear-gradient(90deg, #ff1744, #ff9100)';
+}
+
 function stopPharmacySession() {
   sessionActive = false;
   if (recognition) recognition.stop();
   micBtn.classList.remove('active', 'speaking');
+  micBtn.style.background = 'linear-gradient(90deg, #000, #333)';
   micBtn.textContent = '🎙️ Start Pharmacy Session';
 }
+
 
 /* ---------- Button Controls ---------- */
 micBtn.addEventListener('click',()=>{
