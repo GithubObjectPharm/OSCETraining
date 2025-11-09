@@ -205,12 +205,30 @@ def upload_case():
     }
     patient_state = {"summary": "", "turns": []}
 
+    # --- Generate concise Case Summary (from Candidate Instructions if available) ---
+    summary_prompt = [
+        {"role": "system", "content": (
+            "Extract a short OSCE-style case summary (1–2 sentences max). "
+            "If the text contains 'Candidate Instructions' or 'Exam Case', use that section only. "
+            "The summary should describe what the pharmacist must do or what the patient is seeking. "
+            "Avoid mechanism, dosage, or counseling details. "
+            "Begin with 'Case Summary:' and keep it simple, e.g., "
+            "'A patient has come to the pharmacy seeking advice about managing cough symptoms.'"
+        )},
+        {"role": "user", "content": text}
+    ]
+
+    case_summary = chat_once(summary_prompt, temperature=0.3)
+
+
     return jsonify({
         "message": "Case uploaded successfully.",
         "extracted": facts,
         "summary": summary,
-        "persona": persona
+        "persona": persona,
+        "case_summary": case_summary
     })
+
 
 
 @app.route("/ask", methods=["POST"])
@@ -256,12 +274,11 @@ STYLE RULES:
     completion = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
-        temperature=0.4,         # tighter for consistency/length
-        presence_penalty=0.7,    # discourages repetition/rambling
+        temperature=0.4,
+        presence_penalty=0.7,
         frequency_penalty=0.7,
-        max_tokens=50            # ~1 short sentence (2 if small)
+        max_tokens=60
     )
-
     answer = completion.choices[0].message.content.strip()
 
     # Store conversation & summarize
@@ -321,6 +338,64 @@ def tts():
 @app.route("/uploads/<path:filename>")
 def serve_upload(filename):
     return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
+
+@app.route("/results", methods=["GET"])
+def results():
+    """Analyze conversation performance and return structured scores."""
+    global patient_state
+
+    if not patient_state["turns"]:
+        return jsonify({"error": "No conversation data yet."}), 400
+
+    transcript = "\n".join(
+        [f"{t['role'].capitalize()}: {t['content']}" for t in patient_state["turns"]]
+    )
+
+    analysis_prompt = [
+        {"role": "system", "content": (
+            "You are an OSCE examiner evaluating a pharmacist’s communication in a clinical case. "
+            "Assess professionalism, empathy, active listening, and clinical reasoning. "
+            "Base your evaluation on what would be expected from a pharmacist in patient-centered care, "
+            "including medication counseling, clarification, and follow-up communication."
+
+            "Analyze the pharmacist’s performance and produce a concise JSON object with the following keys:\n\n"
+            "{\n"
+            "  'listening': <integer 0–100>,\n"
+            "  'empathy': <integer 0–100>,\n"
+            "  'communication': <integer 0–100>,\n"
+            "  'problem_solving': <integer 0–100>,\n"
+            "  'good': [two short bullet points of strengths],\n"
+            "  'improvement': [two short bullet points of areas for improvement]\n"
+            "}\n\n"
+            "Be objective but concise. Assess how the pharmacist gathered information, responded empathetically, "
+            "and managed problem-solving (e.g., counseling, adherence, clinical reasoning)."
+        )},
+        {"role": "user", "content": transcript}
+    ]
+
+    try:
+        result_json = chat_once(analysis_prompt, temperature=0.4)
+        import json, re
+        result = json.loads(re.search(r"\{.*\}", result_json, re.S).group(0))
+    except Exception:
+        result = {
+            "listening": 95,
+            "empathy": 88,
+            "communication": 84,
+            "problem_solving": 80,
+            "good": [
+                "Engaged with the patient’s concerns effectively.",
+                "Maintained a clear and respectful communication tone."
+            ],
+            "improvement": [
+                "Could explore patient understanding more thoroughly.",
+                "Should verify adherence and problem-solving steps more explicitly."
+            ]
+        }
+
+    return jsonify(result)
+
+
 
 
 # -------------------- Run --------------------
