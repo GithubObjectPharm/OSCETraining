@@ -83,6 +83,20 @@
     }
     .btn:hover { transform: translateY(-1.5px); }
 
+      #resultsBtn {
+      background: var(--btn-grad);
+      border: none;
+      color: #fff;
+      border-radius: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+      transition: .2s transform ease;
+      white-space: nowrap;
+    }
+    #resultsBtn:hover { transform: translateY(-1.5px); }
+
+
     /* ---------- Disabled State Enhancements ---------- */
     #micBtn:disabled,
     .btn:disabled,
@@ -209,8 +223,9 @@
     <section class="chat">
       <div id="messages" class="messages"></div>
       <div class="input-row">
-        <input id="userInput" type="text" placeholder="Ask the patient a question…">
-        <button id="sendBtn" class="btn">Send</button>
+        <button id="resultsBtn" class="btn" style="width: 100%; height: 52px; font-size: 1rem; font-weight: 700;">
+          View Results
+        </button>
       </div>
     </section>
   </main>
@@ -218,62 +233,85 @@
   <footer>© 2025 PharmacyPrep | AI-Driven OSCE Training Platform</footer>
 
 <script>
-const fileInput = document.getElementById('caseFile');
-const statusEl  = document.getElementById('status');
-const messages  = document.getElementById('messages');
-const input     = document.getElementById('userInput');
-const sendBtn   = document.getElementById('sendBtn');
-const resetBtn  = document.getElementById('resetBtn');
-const micBtn    = document.getElementById('micBtn');
+const fileInput   = document.getElementById('caseFile');
+const statusEl    = document.getElementById('status');
+const messages    = document.getElementById('messages');
+const resetBtn    = document.getElementById('resetBtn');
+const micBtn      = document.getElementById('micBtn');
+const resultsBtn  = document.getElementById('resultsBtn');
 
 let recognition;
 let sessionActive = false;
 let isSpeaking = false;
 let fileUploaded = false;
-let locked = false; // 🔒 NEW: prevents overlapping replies
+let locked = false;
+let transcriptHTML = ''; // store transcript for toggling back
+let caseResults = null; // cache results for this uploaded case
 
+
+
+// --- Initial Setup ---
 statusEl.textContent = '📄 Please upload a file to begin.';
-
-// Disable all controls initially
-input.disabled = true;
-sendBtn.disabled = true;
 micBtn.disabled = true;
+resultsBtn.disabled = true;
 
-function scrollToBottom(){ messages.scrollTop = messages.scrollHeight; }
-function addBubble(sender, text){
-  const wrap=document.createElement('div');
-  wrap.className='msg '+sender;
-  wrap.innerHTML=`<div class="bubble">${text}</div>`;
-  messages.appendChild(wrap); scrollToBottom();
+// --- Utility ---
+function scrollToBottom() { messages.scrollTop = messages.scrollHeight; }
+function addBubble(sender, text) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + sender;
+  wrap.innerHTML = `<div class="bubble">${text}</div>`;
+  messages.appendChild(wrap);
+  scrollToBottom();
 }
 
 function disableSessionControls() {
-  input.disabled = true;
-  sendBtn.disabled = true;
   micBtn.disabled = true;
+  resultsBtn.disabled = true;
 }
-
 function enableSessionControls() {
-  input.disabled = false;
-  sendBtn.disabled = false;
   micBtn.disabled = false;
+  resultsBtn.disabled = false;
 }
 
 /* --------- Upload Case ---------- */
-fileInput.addEventListener('change', async e=>{
-  const file=e.target.files[0];
-  if(!file){ statusEl.textContent='📄 Please upload a file to begin.'; return; }
-  statusEl.textContent='🧠 Uploading and reading case…';
-  const fd=new FormData(); fd.append('file',file);
-  try{
-    const res=await fetch('/upload',{method:'POST',body:fd});
-    const data=await res.json();
-    if(data.error){ statusEl.textContent='❌ '+data.error; return; }
-    statusEl.textContent='✅ Case ready. The AI has assumed the patient role.';
-    fileUploaded = true;
-    enableSessionControls();
-    addBubble('ai','Case uploaded successfully. You may begin asking questions.');
-  }catch{ statusEl.textContent='❌ Upload failed.'; }
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) {
+    statusEl.textContent = '📄 Please upload a file to begin.';
+    return;
+  }
+
+  statusEl.textContent = '🧠 Uploading and reading case…';
+  const fd = new FormData();
+  fd.append('file', file);
+
+  try {
+    const res = await fetch('/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+
+if (data.error) {
+  statusEl.textContent = '❌ ' + data.error;
+  return;
+}
+
+statusEl.textContent = '✅ Case ready. The AI has assumed the patient role.';
+fileUploaded = true;
+enableSessionControls();
+
+// Show Case Scenario clearly
+// Show Case Summary clearly
+if (data.case_summary) {
+  const formatted = data.case_summary
+    .replace(/^Case Summary:/i, "<b>Case Summary:</b> ")
+    .replace(/^Case Scenario:/i, "<b>Case Summary:</b> ");
+  addBubble('ai', formatted);
+} else {
+  addBubble('ai', '<b>Case Summary:</b> A patient has come to the pharmacy seeking advice.');
+}
+  } catch {
+    statusEl.textContent = '❌ Upload failed.';
+  }
 });
 
 /* ---------- TTS ---------- */
@@ -285,69 +323,63 @@ function playVoice(text) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text })
   })
-  .then(r => r.json())
-  .then(d => {
-    if (!d.audio) { isSpeaking = false; locked = false; return; }
-    const audio = new Audio(d.audio);
+    .then(r => r.json())
+    .then(d => {
+      if (!d.audio) { isSpeaking = false; locked = false; return; }
+      const audio = new Audio(d.audio);
 
-    // Show speaking state
-    micBtn.classList.remove('active');
-    micBtn.classList.add('speaking');
-    micBtn.textContent = '🎙️ Speaking...';
-    micBtn.style.background = 'linear-gradient(90deg, #ff8a00, #ff1744)';
+      micBtn.classList.remove('active');
+      micBtn.classList.add('speaking');
+      micBtn.textContent = '🎙️ Speaking...';
+      micBtn.style.background = 'linear-gradient(90deg, #ff8a00, #ff1744)';
+      audio.play();
 
-    audio.play();
+      audio.onended = () => {
+        isSpeaking = false;
+        locked = false;
+        micBtn.classList.remove('speaking');
+        micBtn.classList.add('active');
+        micBtn.textContent = '🎧 Listening...';
+        micBtn.style.background = 'linear-gradient(90deg, #ff1744, #ff9100)';
 
-    audio.onended = () => {
-      isSpeaking = false;
-      locked = false; // ✅ Unlock only after AI finishes speaking
-      micBtn.classList.remove('speaking');
-      micBtn.classList.add('active');
-      micBtn.textContent = '🎧 Listening...';
-      micBtn.style.background = 'linear-gradient(90deg, #ff1744, #ff9100)';
-
-      if (sessionActive && recognition) recognition.start();
-    };
-  })
-  .catch(() => { isSpeaking = false; locked = false; });
+        if (sessionActive && recognition) recognition.start();
+      };
+    })
+    .catch(() => { isSpeaking = false; locked = false; });
 }
 
-/* ---------- Send Question ---------- */
-async function sendQuestion(text){
-  if (!fileUploaded || locked) return; // ✅ ignore if busy
-  const question=text||input.value.trim();
-  if(!question) return;
-  locked = true; // 🔒 Lock before sending
-  addBubble('user',question);
-  input.value='';
-  try{
-    const res=await fetch('/ask',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({question})
+/* ---------- Ask ---------- */
+async function sendQuestion(text) {
+  if (!fileUploaded || locked) return;
+  const question = text?.trim();
+  if (!question) return;
+
+  locked = true;
+  addBubble('user', question);
+
+  try {
+    const res = await fetch('/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question })
     });
-    const data=await res.json();
-    if(data.error){ addBubble('ai','(Error) '+data.error); locked=false; return; }
-    addBubble('ai',data.answer);
+    const data = await res.json();
+
+    if (data.error) {
+      addBubble('ai', '(Error) ' + data.error);
+      locked = false;
+      return;
+    }
+
+    addBubble('ai', data.answer);
     playVoice(data.answer);
-  }catch{ addBubble('ai','(Network error)'); locked=false; }
+  } catch {
+    addBubble('ai', '(Network error)');
+    locked = false;
+  }
 }
-sendBtn.addEventListener('click',()=>sendQuestion());
-input.addEventListener('keydown',e=>{if(e.key==='Enter')sendQuestion();});
 
-/* ---------- Reset Case ---------- */
-resetBtn.addEventListener('click', async ()=>{
-  stopPharmacySession();
-  await fetch('/reset-case',{method:'POST'});
-  messages.innerHTML='';
-  fileInput.value=''; input.value='';
-  fileUploaded = false;
-  disableSessionControls();
-  statusEl.textContent='📄 Please upload a file to begin.';
-  addBubble('ai','🆕 New session started. Upload a case to begin.');
-});
-
-/* ---------- Speech Recognition ---------- */
+/* ---------- Recognition ---------- */
 function startPharmacySession() {
   if (!fileUploaded) return;
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -367,7 +399,7 @@ function startPharmacySession() {
   };
 
   recognition.onresult = (e) => {
-    if (locked) return; // ✅ ignore mid-response fragments
+    if (locked) return;
     const spoken = e.results[0][0].transcript.trim();
     sendQuestion(spoken);
   };
@@ -391,21 +423,138 @@ function stopPharmacySession() {
   sessionActive = false;
   locked = false;
   if (recognition) recognition.stop();
-  micBtn.classList.remove('active','speaking');
+  micBtn.classList.remove('active', 'speaking');
   micBtn.textContent = '🎙️ Start Pharmacy Session';
   micBtn.style.background = 'linear-gradient(90deg, #000, #333)';
 }
 
-/* ---------- Toggle Button ---------- */
-micBtn.addEventListener('click',()=>{
+/* ---------- Toggle ---------- */
+micBtn.addEventListener('click', () => {
   if (!fileUploaded) return;
   sessionActive = !sessionActive;
-  if(sessionActive) startPharmacySession();
+  if (sessionActive) startPharmacySession();
   else stopPharmacySession();
 });
 
+/* ---------- Results ---------- */
+resultsBtn.addEventListener('click', async () => {
+  if (!fileUploaded) return;
+
+  // If we already have cached results, show them immediately
+  if (caseResults) {
+    renderResults(caseResults);
+    return;
+  }
+
+  transcriptHTML = messages.innerHTML;
+  messages.innerHTML = '';
+  messages.style.background = 'var(--glass-strong)';
+  addBubble('ai', '📊 Generating performance analysis...');
+
+  try {
+    const res = await fetch('/results');
+    const data = await res.json();
+    if (data.error) {
+      addBubble('ai', '(Error) ' + data.error);
+      return;
+    }
+
+    // ✅ cache once per case
+    caseResults = data;
+    renderResults(data);
+
+  } catch {
+    addBubble('ai', '(Network error while fetching results)');
+  }
+});
+
+
+function renderBar(label, percent) {
+  return `
+    <div style="margin-bottom:10px;">
+      <div style="font-weight:600;margin-bottom:4px;">${label}
+        <span style="float:right;">${percent}%</span>
+      </div>
+      <div style="width:100%;background:#eee;border-radius:6px;overflow:hidden;height:10px;">
+        <div style="width:${percent}%;height:100%;background:#4aa3a3;border-radius:6px;"></div>
+      </div>
+    </div>
+  `;
+}
+
+
+// helper function for bars
+function renderBar(label, percent) {
+  return `
+    <div style="margin-bottom:10px;">
+      <div style="font-weight:600;margin-bottom:4px;">${label}
+        <span style="float:right;">${percent}%</span>
+      </div>
+      <div style="width:100%;background:#eee;border-radius:6px;overflow:hidden;height:10px;">
+        <div style="width:${percent}%;height:100%;background:#4aa3a3;border-radius:6px;"></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderResults(data) {
+  const html = `
+    <div style="display:flex;justify-content:space-between;gap:32px;flex-wrap:wrap;margin-top:8px;position:relative;">
+<button id="backBtn"
+  style="position:absolute;top:-18px;left:-8px;
+  background:linear-gradient(135deg,#111,#444);
+  color:#fff;border:none;border-radius:10px;
+  padding:10px 18px;font-weight:700;font-size:1rem;
+  cursor:pointer;box-shadow:0 4px 10px rgba(0,0,0,.25);
+  transition:transform .2s ease;">
+  ← Back
+</button>
+
+      <div style="flex:1;min-width:280px;">
+        <div style="margin-bottom:8px;font-weight:600;">Strengths</div>
+        <ul style="list-style:disc;padding-left:20px;margin:0 0 14px 0;font-size:1rem;">
+          ${data.good.map(f => `<li>${f}</li>`).join('')}
+        </ul>
+        <div style="margin-bottom:8px;font-weight:600;">Areas for Improvement</div>
+        <ul style="list-style:disc;padding-left:20px;margin:0;font-size:1rem;">
+          ${data.improvement.map(f => `<li>${f}</li>`).join('')}
+        </ul>
+      </div>
+      <div style="flex:1;min-width:260px;">
+        <h3 style="margin-top:20px;">Interaction Analysis</h3>
+        ${renderBar('Listening', data.listening)}
+        ${renderBar('Empathy', data.empathy)}
+        ${renderBar('Communication', data.communication)}
+        ${renderBar('Problem-Solving', data.problem_solving)}
+      </div>
+    </div>
+  `;
+  messages.innerHTML = html;
+
+  document.getElementById('backBtn').addEventListener('click', () => {
+    messages.innerHTML = transcriptHTML;
+    scrollToBottom();
+  });
+}
+
+
+
+/* ---------- Reset Case ---------- */
+resetBtn.addEventListener('click', async () => {
+  stopPharmacySession();
+  await fetch('/reset-case', { method: 'POST' });
+  messages.innerHTML = '';
+  messages.style.background = 'var(--glass-strong)';
+  fileInput.value = '';
+  fileUploaded = false;
+  disableSessionControls();
+  statusEl.textContent = '📄 Please upload a file to begin.';
+  addBubble('ai', '🆕 New session started. Upload a case to begin.');
+});
+
 /* ---------- Welcome ---------- */
-addBubble('ai','Welcome! Upload a case scenario and then ask me patient questions (e.g., age, medications, allergies).');
+messages.style.background = 'var(--glass-strong)';
+addBubble('ai', data.case_scenario || 'Case Scenario: The patient presents for medication counseling.');
 </script>
 </body>
 </html>
