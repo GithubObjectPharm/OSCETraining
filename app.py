@@ -24,7 +24,7 @@ case_context = {
     "facts": {},
     "summary": "",
     "persona": "",
-    "gender": ""  # used by TTS
+    "gender": ""
 }
 
 patient_state = {
@@ -32,12 +32,12 @@ patient_state = {
     "turns": []
 }
 
-MAX_TURNS = 8  # small context for speed
+MAX_TURNS = 8
+
 
 # -------------------- Helpers --------------------
 
 def extract_text(file_path: str) -> str:
-    """Reads file contents for PDF, DOCX, or TXT."""
     ext = file_path.lower()
     if ext.endswith(".pdf"):
         text = ""
@@ -56,7 +56,6 @@ def extract_text(file_path: str) -> str:
 
 
 def extract_case_info(text: str) -> dict:
-    """Extracts key structured data (name, age, gender, etc.)."""
     info = {}
     patterns = {
         "name": r"(?:Name|Patient Name|Pt Name)[:\s]*([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)",
@@ -74,12 +73,13 @@ def extract_case_info(text: str) -> dict:
         if m:
             info[k] = m.group(1).strip()
 
+    # post processing
     if "medications" in info:
         info["medications"] = [m.strip() for m in re.split(r"[;,]", info["medications"]) if m.strip()]
-    if "allergies" in info:
-        info["allergies"] = [a.strip() for a in re.split(r"[;,]", info["allergies"]) if a.strip()]
 
-    # light pronoun sniff if gender missing (he/him vs she/her in case text)
+    if "allergies" in info:
+        info["allergies"] = [m.strip() for m in re.split(r"[;,]", info["allergies"]) if m.strip()]
+
     if "gender" not in info or not info["gender"]:
         pron = re.search(r"\b(he|she)\b", text, re.I)
         if pron:
@@ -89,74 +89,70 @@ def extract_case_info(text: str) -> dict:
 
 
 def infer_gender_from_name(name: str) -> str:
-    """Guess gender based on name if not explicitly listed."""
     if not name:
         return ""
     first = name.split()[0].lower()
-    female_names = {"jessica", "emily", "sarah", "olivia", "emma", "sophia", "isabella", "ava", "mia", "ella", "jess"}
-    male_names = {"mike", "michael", "john", "james", "robert", "william", "david", "daniel", "matthew", "joseph"}
-    if first in female_names:
-        return "female"
-    if first in male_names:
-        return "male"
+    female = {"jessica", "emily", "sarah", "olivia", "emma", "sophia", "isabella", "ava", "mia", "ella", "jess"}
+    male = {"mike", "michael", "john", "james", "robert", "william", "david", "daniel", "matthew", "joseph"}
+    if first in female: return "female"
+    if first in male: return "male"
     return ""
 
 
 def clamp_turns():
-    """Keep only recent conversation turns."""
     if len(patient_state["turns"]) > MAX_TURNS:
         patient_state["turns"] = patient_state["turns"][-MAX_TURNS:]
 
 
-def chat_once(messages, **kwargs):
-    """Wrapper for a single chat completion (kept lean for latency)."""
+def chat_once(msgs, **kwargs):
     resp = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=messages,
+        messages=msgs,
         **kwargs
     )
     return resp.choices[0].message.content.strip()
 
 
-def summarize_running(previous_summary: str, new_user: str, last_assistant: str = "") -> str:
-    """Maintain a compact running summary."""
-    msgs = [
-        {"role": "system", "content": (
-            "Summarize the pharmacist–patient dialogue in 3–4 short sentences, "
-            "from the patient's perspective. Track symptoms, timing, meds, adherence, and clarifications."
-        )},
-        {"role": "user", "content": (
-            f"Previous summary:\n{previous_summary}\n\n"
-            f"Pharmacist asked:\n{new_user}\n\n"
-            f"Patient replied:\n{last_assistant}\n\n"
-            "Update the running summary."
-        )}
-    ]
-    return chat_once(msgs, temperature=0.2)
-
-
-def detect_intent(utterance: str) -> str:
-    """Lightweight intent classifier to steer brevity."""
-    msgs = [
-        {"role": "system", "content":
-         "Classify this pharmacist question into one of: greeting, identity, age, gender, medications, allergies, "
-         "diagnosis, symptom, duration, severity, lifestyle, adherence, triggers, relief, history, family, social, "
-         "followup, plan, closing, other. Return one label only."},
-        {"role": "user", "content": utterance}
-    ]
-    label = chat_once(msgs, temperature=0.0)
-    return (label or "other").lower().strip()
-
-# -------------------- Routes --------------------
+# -------------------- CORE ROUTES --------------------
 
 @app.route("/")
 def home():
     return render_template("index.html")
 
 
+# -------------------- Start Session (PATIENT SPEAKS FIRST) --------------------
+
+@app.route("/start-session", methods=["POST"])
+def start_session():
+    global case_context, patient_state
+
+    system_prompt = f"""
+You are the patient. Begin the OSCE conversation naturally.
+Say 1–2 sentences like:
+- "Hi, I’m not feeling well today."
+- "Hello… I had some questions about my medication."
+- "Hi… I’ve been having this issue."
+
+PERSONA: {case_context['persona']}
+FACTS: {case_context['facts']}
+BACKGROUND: {case_context['summary']}
+"""
+
+    greeting = chat_once(
+        [{"role": "system", "content": system_prompt}],
+        temperature=0.5,
+        max_tokens=60
+    )
+
+    patient_state["turns"] = [{"role": "assistant", "content": greeting}]
+
+    return jsonify({"greeting": greeting})
+
+
+# -------------------- Upload --------------------
+
 @app.route("/upload", methods=["POST"])
 def upload_case():
-    """Read uploaded case, extract facts, build persona + summary."""
     global case_context, patient_state
 
     file = request.files.get("file")
@@ -179,8 +175,7 @@ def upload_case():
 
     summary = chat_once(
         [
-            {"role": "system", "content":
-             "Write a brief first-person patient background (1–2 sentences). No greeting, no advice."},
+            {"role": "system", "content": "Write a brief first-person patient background (1–2 sentences)."},
             {"role": "user", "content": text}
         ],
         temperature=0.3
@@ -188,13 +183,18 @@ def upload_case():
 
     persona = chat_once(
         [
-            {"role": "system", "content":
-             "Describe the patient's tone and communication style in <=2 short lines "
-             "(e.g., 'anxious but cooperative; concise, matter-of-fact')."},
+            {"role": "system", "content": "Describe the patient's tone in <=2 short lines."},
             {"role": "user", "content": text}
         ],
         temperature=0.5
     )
+
+    summary_prompt = [
+        {"role": "system", "content": "Extract a 1–2 sentence OSCE case summary."},
+        {"role": "user", "content": text}
+    ]
+
+    case_summary = chat_once(summary_prompt, temperature=0.3)
 
     case_context = {
         "raw": text,
@@ -205,22 +205,6 @@ def upload_case():
     }
     patient_state = {"summary": "", "turns": []}
 
-    # --- Generate concise Case Summary (from Candidate Instructions if available) ---
-    summary_prompt = [
-        {"role": "system", "content": (
-            "Extract a short OSCE-style case summary (1–2 sentences max). "
-            "If the text contains 'Candidate Instructions' or 'Exam Case', use that section only. "
-            "The summary should describe what the pharmacist must do or what the patient is seeking. "
-            "Avoid mechanism, dosage, or counseling details. "
-            "Begin with 'Case Summary:' and keep it simple, e.g., "
-            "'A patient has come to the pharmacy seeking advice about managing cough symptoms.'"
-        )},
-        {"role": "user", "content": text}
-    ]
-
-    case_summary = chat_once(summary_prompt, temperature=0.3)
-
-
     return jsonify({
         "message": "Case uploaded successfully.",
         "extracted": facts,
@@ -230,41 +214,26 @@ def upload_case():
     })
 
 
+# -------------------- ASK --------------------
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    """Generate the patient's conversational reply."""
     global case_context, patient_state
 
     user_q = request.json.get("question", "").strip()
     if not user_q:
         return jsonify({"error": "No question"}), 400
 
-    intent = detect_intent(user_q)
     turns_preview = patient_state["turns"][-6:]
 
     system_prompt = f"""
-You are the patient in a pharmacy OSCE. Speak ONLY as the patient in first person.
+You are the patient in a pharmacy OSCE.
+Answer briefly, naturally, 1–2 sentences max.
+Stay in first-person only.
 
-PATIENT PERSONA:
-{case_context.get('persona','')}
-
-FACTS FROM CASE (do not contradict):
-{case_context.get('facts',{})}
-
-BACKGROUND SUMMARY (reference only):
-{case_context.get('summary','')}
-
-RUNNING SUMMARY (what's been said so far):
-{patient_state.get('summary','(none)')}
-
-STYLE RULES:
-- Answer directly and briefly. 1–2 short sentences max unless specific detail is requested.
-- Do NOT greet or ask "How can I help you?" — just answer the question.
-- If something isn't known in the case, say you're not sure.
-- Avoid repeating the whole story; no long monologues.
-- Stay natural and consistent with the persona.
-- Pharmacist’s intent: {intent}.
+PERSONA: {case_context['persona']}
+FACTS: {case_context['facts']}
+BACKGROUND: {case_context['summary']}
 """
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -275,127 +244,174 @@ STYLE RULES:
         model="gpt-4o-mini",
         messages=messages,
         temperature=0.4,
-        presence_penalty=0.7,
-        frequency_penalty=0.7,
         max_tokens=60
     )
     answer = completion.choices[0].message.content.strip()
 
-    # Store conversation & summarize
     patient_state["turns"].append({"role": "user", "content": user_q})
     patient_state["turns"].append({"role": "assistant", "content": answer})
     clamp_turns()
 
-    try:
-        patient_state["summary"] = summarize_running(
-            patient_state["summary"], user_q, answer
-        )
-    except Exception:
-        pass
-
     return jsonify({"answer": answer})
 
 
-@app.route("/reset-case", methods=["POST"])
-def reset_case():
-    global case_context, patient_state
-    case_context = {"raw": "", "facts": {}, "summary": "", "persona": "", "gender": ""}
-    patient_state = {"summary": "", "turns": []}
-    return jsonify({"status": "reset"})
-
+# -------------------- TTS (WORKING NEW SDK VERSION) --------------------
 
 @app.route("/tts", methods=["POST"])
 def tts():
-    """Generate quick voice output and wait until MP3 file ready (prevents UI flicker)."""
     text = request.json.get("text", "").strip()
     if not text:
         return jsonify({"error": "No text provided"}), 400
 
-    clean = re.sub(r"[\n\r]+", " ", text).strip()[:420]
-
-    gender = case_context.get("gender", "").lower()
-    if "female" in gender:
-        voice_choice = "alloy"
-    elif "male" in gender:
-        voice_choice = "verse"
-    else:
-        voice_choice = "verse"
+    gender = case_context.get("gender", "")
+    voice_choice = "alloy" if gender == "female" else "verse"
 
     audio_filename = f"voice_{uuid.uuid4().hex}.mp3"
     audio_path = os.path.join(app.config["UPLOAD_FOLDER"], audio_filename)
 
-    # wait for speech to be fully written before responding
     with client.audio.speech.with_streaming_response.create(
         model="gpt-4o-mini-tts",
         voice=voice_choice,
-        input=clean
+        input=text
     ) as r:
         r.stream_to_file(audio_path)
 
     return jsonify({"audio": f"/uploads/{audio_filename}", "ready": True})
 
+# -------------------- LIST CHAPTERS --------------------
+
+@app.route("/list-chapters")
+def list_chapters():
+    base_path = "Chapters"   # Make sure this folder is in the project root
+
+    if not os.path.exists(base_path):
+        return jsonify({"error": "Chapters folder not found"}), 404
+
+    result = {}
+
+    # Loop through items in the Chapters folder
+    for chapter in os.listdir(base_path):
+        chapter_path = os.path.join(base_path, chapter)
+
+        # Only accept folders (Chapter 1, Chapter 2, etc.)
+        if os.path.isdir(chapter_path):
+
+            files = []
+            for f in os.listdir(chapter_path):
+                if f.lower().endswith((".txt", ".pdf", ".docx")):
+                    files.append(f)
+
+            # Add to dictionary
+            result[chapter] = files
+
+    return jsonify(result)
+# -------------------- LOAD DEFAULT CASE --------------------
+
+@app.route("/load-default-case", methods=["POST"])
+def load_default_case():
+    global case_context, patient_state
+
+    data = request.get_json()
+    chapter = data.get("chapter")
+    filename = data.get("file")
+
+    if not chapter or not filename:
+        return jsonify({"error": "Invalid request"}), 400
+
+    full_path = os.path.join("Chapters", chapter, filename)
+
+    if not os.path.exists(full_path):
+        return jsonify({"error": "Case file not found"}), 404
+
+    # Read file content using your extract_text() function
+    try:
+        text = extract_text(full_path)
+    except:
+        return jsonify({"error": "Failed to read file"}), 500
+
+    # Extract structured facts
+    facts = extract_case_info(text)
+
+    # Infer gender if not present
+    if "gender" not in facts or not facts["gender"]:
+        inferred = infer_gender_from_name(facts.get("name", ""))
+        if inferred:
+            facts["gender"] = inferred
+
+    # Generate patient background
+    summary = chat_once(
+        [
+            {"role": "system", "content": "Write a brief first-person patient background (1–2 sentences)."},
+            {"role": "user", "content": text}
+        ],
+        temperature=0.3
+    )
+
+    # Tone/persona
+    persona = chat_once(
+        [
+            {"role": "system", "content": "Describe the patient's tone in <=2 short lines."},
+            {"role": "user", "content": text}
+        ],
+        temperature=0.5
+    )
+
+    # Case Summary
+    case_summary = chat_once(
+        [
+            {"role": "system", "content": "Extract a 1–2 sentence OSCE case summary."},
+            {"role": "user", "content": text}
+        ],
+        temperature=0.3
+    )
+
+    # Save context
+    case_context = {
+        "raw": text,
+        "facts": facts,
+        "summary": summary,
+        "persona": persona,
+        "gender": (facts.get("gender") or "").lower()
+    }
+    patient_state = {"summary": "", "turns": []}
+
+    return jsonify({
+        "case_summary": case_summary,
+        "summary": summary,
+        "persona": persona,
+        "extracted": facts
+    })
+
+@app.route("/auto-greet", methods=["POST"])
+def auto_greet():
+    global case_context, patient_state
+
+    system_prompt = f"""
+You are the patient. Provide a simple greeting, 1 sentence.
+Examples:
+- "Hi, I'm here because I'm not feeling well today."
+- "Hello, I had some concerns about my medication."
+- "Hi, I’ve been having this issue and wanted to ask for advice."
+
+PERSONA: {case_context['persona']}
+FACTS: {case_context['facts']}
+BACKGROUND: {case_context['summary']}
+"""
+
+    greeting = chat_once(
+        [{"role": "system", "content": system_prompt}],
+        temperature=0.5,
+        max_tokens=40
+    )
+
+    patient_state["turns"] = [{"role": "assistant", "content": greeting}]
+
+    return jsonify({"greeting": greeting})
+
 
 @app.route("/uploads/<path:filename>")
 def serve_upload(filename):
     return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
-
-@app.route("/results", methods=["GET"])
-def results():
-    """Analyze conversation performance and return structured scores."""
-    global patient_state
-
-    if not patient_state["turns"]:
-        return jsonify({"error": "No conversation data yet."}), 400
-
-    transcript = "\n".join(
-        [f"{t['role'].capitalize()}: {t['content']}" for t in patient_state["turns"]]
-    )
-
-    analysis_prompt = [
-        {"role": "system", "content": (
-            "You are an OSCE examiner evaluating a pharmacist’s communication in a clinical case. "
-            "Assess professionalism, empathy, active listening, and clinical reasoning. "
-            "Base your evaluation on what would be expected from a pharmacist in patient-centered care, "
-            "including medication counseling, clarification, and follow-up communication."
-
-            "Analyze the pharmacist’s performance and produce a concise JSON object with the following keys:\n\n"
-            "{\n"
-            "  'listening': <integer 0–100>,\n"
-            "  'empathy': <integer 0–100>,\n"
-            "  'communication': <integer 0–100>,\n"
-            "  'problem_solving': <integer 0–100>,\n"
-            "  'good': [two short bullet points of strengths],\n"
-            "  'improvement': [two short bullet points of areas for improvement]\n"
-            "}\n\n"
-            "Be objective but concise. Assess how the pharmacist gathered information, responded empathetically, "
-            "and managed problem-solving (e.g., counseling, adherence, clinical reasoning)."
-        )},
-        {"role": "user", "content": transcript}
-    ]
-
-    try:
-        result_json = chat_once(analysis_prompt, temperature=0.4)
-        import json, re
-        result = json.loads(re.search(r"\{.*\}", result_json, re.S).group(0))
-    except Exception:
-        result = {
-            "listening": 95,
-            "empathy": 88,
-            "communication": 84,
-            "problem_solving": 80,
-            "good": [
-                "Engaged with the patient’s concerns effectively.",
-                "Maintained a clear and respectful communication tone."
-            ],
-            "improvement": [
-                "Could explore patient understanding more thoroughly.",
-                "Should verify adherence and problem-solving steps more explicitly."
-            ]
-        }
-
-    return jsonify(result)
-
-
 
 
 # -------------------- Run --------------------
