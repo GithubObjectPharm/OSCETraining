@@ -49,6 +49,8 @@
 
     .controls { display: grid; grid-template-columns: 1fr 160px; gap: 14px; align-items: stretch; }
 
+
+        
     .upload {
       border: 2px dashed rgba(0, 0, 0, .3);
       border-radius: 14px;
@@ -83,6 +85,8 @@
     }
     .btn:hover { transform: translateY(-1.5px); }
 
+
+    
       #resultsBtn {
       background: var(--btn-grad);
       border: none;
@@ -105,6 +109,10 @@
       cursor: not-allowed !important;
       pointer-events: auto !important; /* allow hover to show not-allowed cursor */
     }
+    #modeToggleBtn {
+  height: 100%;
+}
+
 
     #micBtn:disabled:hover,
     .btn:disabled:hover,
@@ -205,14 +213,43 @@
   </header>
 
   <main>
-    <div class="controls">
-      <label class="upload" for="caseFile">
-        <strong>Upload a Case Scenario File</strong>
-        <small>(PDF, TXT, or DOCX)</small>
-      </label>
-      <button class="btn" id="resetBtn">New Case</button>
-      <input id="caseFile" type="file" accept=".pdf,.txt,.docx">
-    </div>
+<div class="controls" style="grid-template-columns: 160px 1fr 160px; align-items:center;">
+  
+  <!-- LEFT BUTTON -->
+  <button class="btn" id="modeToggleBtn">Default Cases</button>
+
+  <!-- CENTER COLUMN WRAPPER -->
+  <div id="centerContainer" style="width:100%;">
+
+    <!-- UPLOAD BOX (default) -->
+    <label class="upload" id="uploadBox" for="caseFile">
+      <strong>Upload a Case Scenario File</strong>
+      <small>(PDF, TXT, or DOCX)</small>
+    </label>
+<div id="dropdownContainer" style="display:none; width:100%; display:flex; flex-direction:column; gap:10px;">
+
+  <!-- CHAPTER DROPDOWN -->
+  <select id="caseCategory" style="padding:12px; border-radius:10px; width:100%;">
+      <option disabled selected>Select Category</option>
+      <!-- Dynamic chapters inserted by JS -->
+  </select>
+
+  <!-- CASE FILE DROPDOWN -->
+  <select id="caseList" style="padding:12px; border-radius:10px; width:100%;">
+      <option disabled selected>Select Case</option>
+      <!-- Dynamic files inserted by JS -->
+  </select>
+
+</div>
+
+  </div>
+
+  <!-- RIGHT BUTTON -->
+  <button class="btn" id="resetBtn">New Case</button>
+
+  <input id="caseFile" type="file" accept=".pdf,.txt,.docx">
+</div>
+
 
     <div id="status" class="status"></div>
 
@@ -233,6 +270,8 @@
   <footer>© 2025 PharmacyPrep | AI-Driven OSCE Training Platform</footer>
 
 <script>
+
+  
 const fileInput   = document.getElementById('caseFile');
 const statusEl    = document.getElementById('status');
 const messages    = document.getElementById('messages');
@@ -274,6 +313,37 @@ function enableSessionControls() {
   resultsBtn.disabled = false;
 }
 
+const modeBtn = document.getElementById("modeToggleBtn");
+const uploadBox = document.getElementById("uploadBox");
+const dropdownContainer = document.getElementById("dropdownContainer");
+
+let useDefaultCases = true;
+
+modeBtn.addEventListener("click", () => {
+  useDefaultCases = !useDefaultCases;
+
+  if (useDefaultCases) {
+    modeBtn.textContent = "Manual Upload";
+
+    // Hide upload box, show dropdowns
+    uploadBox.style.display = "none";
+    dropdownContainer.style.display = "flex";
+
+    statusEl.textContent = "📚 Default case mode activated. Select a category.";
+
+  } else {
+    modeBtn.textContent = "Default Cases";
+
+    // Show upload box, hide dropdowns
+    uploadBox.style.display = "flex";
+    dropdownContainer.style.display = "none";
+
+    statusEl.textContent = "📄 Please upload a file to begin.";
+  }
+});
+
+
+
 /* --------- Upload Case ---------- */
 fileInput.addEventListener('change', async (e) => {
   const file = e.target.files[0];
@@ -294,6 +364,7 @@ if (data.error) {
   statusEl.textContent = '❌ ' + data.error;
   return;
 }
+
 
 statusEl.textContent = '✅ Case ready. The AI has assumed the patient role.';
 fileUploaded = true;
@@ -347,6 +418,11 @@ function playVoice(text) {
     })
     .catch(() => { isSpeaking = false; locked = false; });
 }
+useDefaultCases = true;
+modeBtn.textContent = "Manual Upload";
+uploadBox.style.display = "none";
+dropdownContainer.style.display = "flex";
+statusEl.textContent = "📚 Default case mode activated. Select a category.";
 
 /* ---------- Ask ---------- */
 async function sendQuestion(text) {
@@ -390,7 +466,9 @@ function startPharmacySession() {
 
   recognition = new SpeechRecognition();
   recognition.lang = 'en-US';
-  recognition.interimResults = false;
+  recognition.interimResults = true;
+  recognition.continuous = true;
+
 
   recognition.onstart = () => {
     micBtn.classList.add('active');
@@ -398,11 +476,32 @@ function startPharmacySession() {
     micBtn.style.background = 'linear-gradient(90deg, #ff1744, #ff9100)';
   };
 
-  recognition.onresult = (e) => {
-    if (locked) return;
-    const spoken = e.results[0][0].transcript.trim();
-    sendQuestion(spoken);
-  };
+let buffer = "";
+let silenceTimer = null;
+
+recognition.onresult = (e) => {
+  if (locked) return;
+
+  let result = e.results[e.results.length - 1];
+
+  // Only accept FINAL speech segments
+  if (!result.isFinal) return;
+
+  let transcript = result[0].transcript.trim();
+  buffer += " " + transcript;
+
+  clearTimeout(silenceTimer);
+
+  silenceTimer = setTimeout(() => {
+    const finalText = buffer.trim();
+    if (finalText.length > 0) {
+      sendQuestion(finalText);
+    }
+    buffer = "";
+  }, 1200);
+};
+
+
 
   recognition.onend = () => {
     if (sessionActive && !isSpeaking) recognition.start();
@@ -551,10 +650,83 @@ resetBtn.addEventListener('click', async () => {
   statusEl.textContent = '📄 Please upload a file to begin.';
   addBubble('ai', '🆕 New session started. Upload a case to begin.');
 });
+async function loadChapters() {
+    const res = await fetch("/list-chapters");
+    const data = await res.json();
+
+    const categoryDD = document.getElementById("caseCategory");
+    const caseDD = document.getElementById("caseList");
+
+    // Clear dropdowns
+    categoryDD.innerHTML = `<option disabled selected>Select Category</option>`;
+    caseDD.innerHTML = `<option disabled selected>Select Case</option>`;
+
+    // Populate Chapter Dropdown
+    Object.keys(data).forEach(chapter => {
+        const opt = document.createElement("option");
+        opt.value = chapter;
+        opt.textContent = chapter;
+        categoryDD.appendChild(opt);
+    });
+
+    // When category is selected → populate case list
+    categoryDD.addEventListener("change", () => {
+        const chapter = categoryDD.value;
+        const files = data[chapter];
+
+        caseDD.innerHTML = `<option disabled selected>Select Case</option>`;
+
+        files.forEach(file => {
+            const opt = document.createElement("option");
+            opt.value = file;
+            opt.textContent = file;
+            caseDD.appendChild(opt);
+        });
+    });
+}
+
+loadChapters();
+document.getElementById("caseList").addEventListener("change", async () => {
+    const chapter = document.getElementById("caseCategory").value;
+    const file = document.getElementById("caseList").value;
+
+    if (!chapter || !file) return;
+
+    statusEl.textContent = "📘 Loading case...";
+
+    const res = await fetch("/load-default-case", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapter, file })
+    });
+
+    const data = await res.json();
+
+    if (data.error) {
+        addBubble("ai", "❌ " + data.error);
+        return;
+    }
+
+    // Show Case Summary like manual upload does
+    const summaryText = data.case_summary
+        .replace(/^Case Summary:/i, "<b>Case Summary:</b> ");
+
+    addBubble("ai", summaryText);
+
+    fileUploaded = true;
+    enableSessionControls();
+
+    statusEl.textContent = "✅ Case loaded. AI is now the patient.";
+});
 
 /* ---------- Welcome ---------- */
 messages.style.background = 'var(--glass-strong)';
-addBubble('ai', data.case_scenario || 'Case Scenario: The patient presents for medication counseling.');
+addBubble('ai', 'Case Scenario: The patient presents for medication counseling.');
+if (data.initial_greeting) {
+  addBubble('ai', data.initial_greeting);  // show in chat
+  playVoice(data.initial_greeting);        // speak it
+}
+
 </script>
 </body>
 </html>
