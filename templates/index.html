@@ -370,7 +370,6 @@ statusEl.textContent = '✅ Case ready. The AI has assumed the patient role.';
 fileUploaded = true;
 enableSessionControls();
 
-// Show Case Scenario clearly
 // Show Case Summary clearly
 if (data.case_summary) {
   const formatted = data.case_summary
@@ -380,6 +379,12 @@ if (data.case_summary) {
 } else {
   addBubble('ai', '<b>Case Summary:</b> A patient has come to the pharmacy seeking advice.');
 }
+
+// ✅ ADD REFERENCES IMMEDIATELY AFTER SUMMARY
+if (data.references) {
+  addBubble('ai', `<span style="font-size:0.9em;color:#ddd;">References: ${data.references}</span>`);
+}
+
   } catch {
     statusEl.textContent = '❌ Upload failed.';
   }
@@ -408,6 +413,8 @@ function playVoice(text) {
       audio.onended = () => {
         isSpeaking = false;
         locked = false;
+        micBtn.disabled = false;
+
         micBtn.classList.remove('speaking');
         micBtn.classList.add('active');
         micBtn.textContent = '🎧 Listening...';
@@ -455,12 +462,46 @@ async function sendQuestion(text) {
   }
 }
 
-/* ---------- Recognition ---------- */
-function startPharmacySession() {
-  if (!fileUploaded) return;
+async function startPharmacySession() {
+  if (!fileUploaded || locked) return;
+
+  if (recognition) {
+    recognition.stop();
+    recognition = null;
+  }
+
+  locked = true;
+  sessionActive = true;
+  micBtn.disabled = true;
+
+
+
+  // --- Ask backend for patient opening statement ---
+  let greeting = null;
+  try {
+    const res = await fetch('/start-session', { method: 'POST' });
+    const data = await res.json();
+    greeting = data.greeting;
+  } catch {
+    addBubble('ai', '(Failed to start session)');
+    locked = false;
+    return;
+  }
+
+  // --- Show & speak patient greeting ---
+  if (greeting) {
+    addBubble('ai', greeting);
+    playVoice(greeting);
+  } else {
+    locked = false;
+    return;
+  }
+
+  // --- Prepare speech recognition (DO NOT START YET) ---
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
     alert('Speech recognition not supported');
+    locked = false;
     return;
   }
 
@@ -469,39 +510,30 @@ function startPharmacySession() {
   recognition.interimResults = true;
   recognition.continuous = true;
 
-
   recognition.onstart = () => {
     micBtn.classList.add('active');
     micBtn.textContent = '🎧 Listening...';
     micBtn.style.background = 'linear-gradient(90deg, #ff1744, #ff9100)';
   };
 
-let buffer = "";
-let silenceTimer = null;
+  let buffer = "";
+  let silenceTimer = null;
 
-recognition.onresult = (e) => {
-  if (locked) return;
+  recognition.onresult = (e) => {
+    if (locked) return;
 
-  let result = e.results[e.results.length - 1];
+    let result = e.results[e.results.length - 1];
+    if (!result.isFinal) return;
 
-  // Only accept FINAL speech segments
-  if (!result.isFinal) return;
+    buffer += " " + result[0].transcript.trim();
 
-  let transcript = result[0].transcript.trim();
-  buffer += " " + transcript;
-
-  clearTimeout(silenceTimer);
-
-  silenceTimer = setTimeout(() => {
-    const finalText = buffer.trim();
-    if (finalText.length > 0) {
-      sendQuestion(finalText);
-    }
-    buffer = "";
-  }, 1200);
-};
-
-
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => {
+      const finalText = buffer.trim();
+      if (finalText.length > 0) sendQuestion(finalText);
+      buffer = "";
+    }, 1200);
+  };
 
   recognition.onend = () => {
     if (sessionActive && !isSpeaking) recognition.start();
@@ -511,10 +543,9 @@ recognition.onresult = (e) => {
     if (!sessionActive) stopPharmacySession();
   };
 
-  recognition.start();
-  micBtn.classList.add('active');
-  micBtn.textContent = '🎧 Listening...';
-  micBtn.style.background = 'linear-gradient(90deg, #ff1744, #ff9100)';
+  // 🔑 IMPORTANT:
+  // recognition.start() is NOT called here.
+  // It will start AFTER the AI finishes speaking.
 }
 
 /* ---------- Stop ---------- */
@@ -527,13 +558,16 @@ function stopPharmacySession() {
   micBtn.style.background = 'linear-gradient(90deg, #000, #333)';
 }
 
-/* ---------- Toggle ---------- */
 micBtn.addEventListener('click', () => {
-  if (!fileUploaded) return;
-  sessionActive = !sessionActive;
-  if (sessionActive) startPharmacySession();
-  else stopPharmacySession();
+  if (!fileUploaded || locked) return;
+
+  if (!sessionActive) {
+    startPharmacySession();
+  } else {
+    stopPharmacySession();
+  }
 });
+
 
 /* ---------- Results ---------- */
 resultsBtn.addEventListener('click', async () => {
@@ -582,19 +616,7 @@ function renderBar(label, percent) {
 }
 
 
-// helper function for bars
-function renderBar(label, percent) {
-  return `
-    <div style="margin-bottom:10px;">
-      <div style="font-weight:600;margin-bottom:4px;">${label}
-        <span style="float:right;">${percent}%</span>
-      </div>
-      <div style="width:100%;background:#eee;border-radius:6px;overflow:hidden;height:10px;">
-        <div style="width:${percent}%;height:100%;background:#4aa3a3;border-radius:6px;"></div>
-      </div>
-    </div>
-  `;
-}
+
 
 function renderResults(data) {
   const html = `
@@ -713,19 +735,25 @@ document.getElementById("caseList").addEventListener("change", async () => {
 
     addBubble("ai", summaryText);
 
+    // ✅ ADD THIS BLOCK
+    if (data.references && data.references.trim() !== "") {
+      addBubble(
+        "ai",
+        `<span style="font-size:0.9em;color:#ddd;">References: ${data.references}</span>`
+      );
+    }
+
     fileUploaded = true;
     enableSessionControls();
 
     statusEl.textContent = "✅ Case loaded. AI is now the patient.";
+
 });
 
 /* ---------- Welcome ---------- */
 messages.style.background = 'var(--glass-strong)';
 addBubble('ai', 'Case Scenario: The patient presents for medication counseling.');
-if (data.initial_greeting) {
-  addBubble('ai', data.initial_greeting);  // show in chat
-  playVoice(data.initial_greeting);        // speak it
-}
+
 
 </script>
 </body>
