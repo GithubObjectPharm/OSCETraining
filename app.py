@@ -1,420 +1,760 @@
-from flask import Flask, render_template, request, jsonify, send_from_directory
-from werkzeug.utils import secure_filename
-from openai import OpenAI
-import os, re, uuid
-from PyPDF2 import PdfReader
-from docx import Document
+<!DOCTYPE html>
+<html lang="en-CA">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PharmacyPrep AI Patient Simulator</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
 
-# -------------------- Flask & OpenAI --------------------
+    :root {
+      --bg1: #ffffff;
+      --bg2: #f4f4f4;
+      --glass: rgba(200, 200, 200, .25);
+      --glass-strong: rgba(255, 255, 255, .6);
+      --border: rgba(0, 0, 0, .15);
+      --text: #000;
+      --muted: #333;
+      --btn-grad: linear-gradient(135deg, #111, #444);
+    }
 
-app = Flask(__name__)
-app.config["UPLOAD_FOLDER"] = "uploads"
-os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+    * { box-sizing: border-box; }
+    html, body { height: 100%; zoom: 0.96; }
 
-from dotenv import load_dotenv
-load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-print("Key loaded:", bool(os.getenv("OPENAI_API_KEY")))
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, -apple-system, Segoe UI, Arial, sans-serif;
+      color: var(--text);
+      background: linear-gradient(120deg, var(--bg1) 0%, var(--bg2) 100%);
+      background-attachment: fixed;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    header { text-align: center; margin: 38px 16px 8px; }
+    header h1 { margin: 0 0 6px; font-size: clamp(1.6rem, 2.4vw, 2.2rem); font-weight: 700; color: #000; }
+    header p { margin: 0; color: var(--muted); font-size: .98rem; }
+
+    main {
+      width: min(96%, 980px);
+      margin: 18px auto 28px;
+      background: var(--glass);
+      backdrop-filter: blur(18px);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, .12);
+      padding: clamp(16px, 2vw, 28px);
+    }
+
+    .controls { display: grid; grid-template-columns: 1fr 160px; gap: 14px; align-items: stretch; }
 
 
-# -------------------- Global Case / Conversation State --------------------
+        
+    .upload {
+      border: 2px dashed rgba(0, 0, 0, .3);
+      border-radius: 14px;
+      padding: 16px 18px;
+      background: rgba(255, 255, 255, .6);
+      text-align: center;
+      cursor: pointer;
+      transition: .25s ease;
+      user-select: none;
+      color: #000;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
 
-case_context = {
-    "raw": "",
-    "facts": {},
-    "summary": "",
-    "persona": "",
-    "gender": ""
+    .upload:hover { background: rgba(255, 255, 255, .9); border-color: rgba(0, 0, 0, .6); }
+    .upload small { display: block; color: #555; margin-top: 2px; }
+    input[type="file"] { display: none !important; }
+
+    .btn {
+      background: var(--btn-grad);
+      border: none;
+      color: #fff;
+      border-radius: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+      transition: .2s transform ease;
+      white-space: nowrap;
+      height: 100%;
+      font-size: 1rem;
+    }
+    .btn:hover { transform: translateY(-1.5px); }
+
+
+    
+      #resultsBtn {
+      background: var(--btn-grad);
+      border: none;
+      color: #fff;
+      border-radius: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+      transition: .2s transform ease;
+      white-space: nowrap;
+    }
+    #resultsBtn:hover { transform: translateY(-1.5px); }
+
+
+    /* ---------- Disabled State Enhancements ---------- */
+    #micBtn:disabled,
+    .btn:disabled,
+    #sendBtn:disabled {
+      opacity: 0.55 !important;
+      cursor: not-allowed !important;
+      pointer-events: auto !important; /* allow hover to show not-allowed cursor */
+    }
+    #modeToggleBtn {
+  height: 100%;
 }
 
-patient_state = {
-    "summary": "",
-    "turns": []
+
+    #micBtn:disabled:hover,
+    .btn:disabled:hover,
+    #sendBtn:disabled:hover {
+      opacity: 0.55 !important;
+    }
+
+    .status { margin-top: 10px; color: #000; min-height: 20px; }
+
+    /* Session Button */
+    .mic-bar { margin-top: 0; margin-bottom: 0; text-align: center; }
+
+      #micBtn {
+    width: 100%;
+    height: 86px;
+    background: linear-gradient(90deg, #000, #333);
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.15rem;
+    border: none;
+    border-radius: 14px;
+    cursor: pointer;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .25);
+    transition: all 0.25s ease;
+    margin-top: 12px;
+  }
+
+  /* Listening / Active */
+  #micBtn.active {
+    background: linear-gradient(90deg, #ff1744, #ff9100);
+    animation: pulse 1.2s infinite;
+  }
+
+  /* Speaking */
+  #micBtn.speaking {
+    background: linear-gradient(90deg, #ff8a00, #ff1744);
+  }
+
+  /* Disabled — keep full color, but no hover or clicks */
+  #micBtn:disabled {
+    cursor: not-allowed;
+    pointer-events: none;
+    filter: brightness(0.9);
+  }
+
+  /* Pulse effect */
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.4); }
+    70% { box-shadow: 0 0 0 14px rgba(255, 0, 0, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0); }
+  }
+
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.4); }
+      70% { box-shadow: 0 0 0 14px rgba(255, 0, 0, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0); }
+    }
+
+    .chat {
+      margin-top: 12px; background: var(--glass-strong);
+      border: 1px solid var(--border); border-radius: 18px;
+      height: 460px; overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+
+    .messages { padding: 16px; overflow-y: auto; flex: 1 1 auto; scroll-behavior: smooth; }
+    .msg { display: flex; margin: 10px 0; }
+    .msg.user { justify-content: flex-end; }
+    .msg.ai { justify-content: flex-start; }
+
+    .bubble {
+      max-width: min(76%, 560px); padding: 10px 14px;
+      border-radius: 14px; line-height: 1.45;
+      background: rgba(0, 0, 0, .9); color: #fff;
+      box-shadow: 0 3px 12px rgba(0, 0, 0, .18);
+      white-space: pre-wrap; word-wrap: break-word;
+      font-size: 1rem;
+    }
+
+    .msg.user .bubble {
+      background: #f2f2f2; color: #000;
+      box-shadow: 0 3px 12px rgba(0, 0, 0, .15);
+    }
+
+    .input-row { display: flex; gap: 10px; padding: 12px; border-top: 1px solid var(--border); background: rgba(255, 255, 255, .8); }
+    #userInput { flex: 1; border: none; outline: none; border-radius: 12px; padding: 12px 14px; font-size: 1rem; color: #000; background: #fff; }
+    #sendBtn { padding: 12px 18px; }
+
+    footer { text-align: center; color: #444; font-size: .92rem; margin: 8px 16px 26px; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>PharmacyPrep AI Patient Simulator</h1>
+    <p>Practice patient interviewing and assessment in real time.</p>
+  </header>
+
+  <main>
+<div class="controls" style="grid-template-columns: 160px 1fr 160px; align-items:center;">
+  
+  <!-- LEFT BUTTON -->
+  <button class="btn" id="modeToggleBtn">Default Cases</button>
+
+  <!-- CENTER COLUMN WRAPPER -->
+  <div id="centerContainer" style="width:100%;">
+
+    <!-- UPLOAD BOX (default) -->
+    <label class="upload" id="uploadBox" for="caseFile">
+      <strong>Upload a Case Scenario File</strong>
+      <small>(PDF, TXT, or DOCX)</small>
+    </label>
+<div id="dropdownContainer" style="display:none; width:100%; display:flex; flex-direction:column; gap:10px;">
+
+  <!-- CHAPTER DROPDOWN -->
+  <select id="caseCategory" style="padding:12px; border-radius:10px; width:100%;">
+      <option disabled selected>Select Category</option>
+      <!-- Dynamic chapters inserted by JS -->
+  </select>
+
+  <!-- CASE FILE DROPDOWN -->
+  <select id="caseList" style="padding:12px; border-radius:10px; width:100%;">
+      <option disabled selected>Select Case</option>
+      <!-- Dynamic files inserted by JS -->
+  </select>
+
+</div>
+
+  </div>
+
+  <!-- RIGHT BUTTON -->
+  <button class="btn" id="resetBtn">New Case</button>
+
+  <input id="caseFile" type="file" accept=".pdf,.txt,.docx">
+</div>
+
+
+    <div id="status" class="status"></div>
+
+    <div class="mic-bar">
+      <button id="micBtn">🎙️ Start Pharmacy Session</button>
+    </div>
+
+    <section class="chat">
+      <div id="messages" class="messages"></div>
+      <div class="input-row">
+        <button id="resultsBtn" class="btn" style="width: 100%; height: 52px; font-size: 1rem; font-weight: 700;">
+          View Results
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <footer>© 2025 PharmacyPrep | AI-Driven OSCE Training Platform</footer>
+
+<script>
+
+  
+const fileInput   = document.getElementById('caseFile');
+const statusEl    = document.getElementById('status');
+const messages    = document.getElementById('messages');
+const resetBtn    = document.getElementById('resetBtn');
+const micBtn      = document.getElementById('micBtn');
+const resultsBtn  = document.getElementById('resultsBtn');
+
+let recognition;
+let sessionActive = false;
+let isSpeaking = false;
+let fileUploaded = false;
+let locked = false;
+let transcriptHTML = ''; // store transcript for toggling back
+let caseResults = null; // cache results for this uploaded case
+
+
+
+// --- Initial Setup ---
+statusEl.textContent = '📄 Please upload a file to begin.';
+micBtn.disabled = true;
+resultsBtn.disabled = true;
+
+// --- Utility ---
+function scrollToBottom() { messages.scrollTop = messages.scrollHeight; }
+function addBubble(sender, text) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + sender;
+  wrap.innerHTML = `<div class="bubble">${text}</div>`;
+  messages.appendChild(wrap);
+  scrollToBottom();
 }
 
-MAX_TURNS = 8
+function disableSessionControls() {
+  micBtn.disabled = true;
+  resultsBtn.disabled = true;
+}
+function enableSessionControls() {
+  micBtn.disabled = false;
+  resultsBtn.disabled = false;
+}
+
+const modeBtn = document.getElementById("modeToggleBtn");
+const uploadBox = document.getElementById("uploadBox");
+const dropdownContainer = document.getElementById("dropdownContainer");
+
+let useDefaultCases = true;
+
+modeBtn.addEventListener("click", () => {
+  useDefaultCases = !useDefaultCases;
+
+  if (useDefaultCases) {
+    modeBtn.textContent = "Manual Upload";
+
+    // Hide upload box, show dropdowns
+    uploadBox.style.display = "none";
+    dropdownContainer.style.display = "flex";
+
+    statusEl.textContent = "📚 Default case mode activated. Select a category.";
+
+  } else {
+    modeBtn.textContent = "Default Cases";
+
+    // Show upload box, hide dropdowns
+    uploadBox.style.display = "flex";
+    dropdownContainer.style.display = "none";
+
+    statusEl.textContent = "📄 Please upload a file to begin.";
+  }
+});
 
 
-# -------------------- Helpers --------------------
 
-def extract_text(file_path: str) -> str:
-    ext = file_path.lower()
-    if ext.endswith(".pdf"):
-        text = ""
-        with open(file_path, "rb") as f:
-            pdf = PdfReader(f)
-            for p in pdf.pages:
-                text += p.extract_text() or ""
-        return text
-    elif ext.endswith(".docx"):
-        doc = Document(file_path)
-        return "\n".join(p.text for p in doc.paragraphs)
-    elif ext.endswith(".txt"):
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
-    return ""
+/* --------- Upload Case ---------- */
+fileInput.addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) {
+    statusEl.textContent = '📄 Please upload a file to begin.';
+    return;
+  }
 
+  statusEl.textContent = '🧠 Uploading and reading case…';
+  const fd = new FormData();
+  fd.append('file', file);
 
-def extract_case_info(text: str) -> dict:
-    info = {}
-    patterns = {
-        "name": r"(?:Name|Patient Name|Pt Name)[:\s]*([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)",
-        "age": r"(?:Age)[:\s]*([0-9]{1,3})",
-        "gender": r"(?:Sex|Gender)[:\s]*([A-Za-z]+)",
-        "weight": r"(?:Weight)[:\s]*([\d\.]+)",
-        "height": r"(?:Height)[:\s]*([\d\.]+)",
-        "allergies": r"(?:Allerg(?:y|ies))[:\s]*([^\n;]+)",
-        "medications": r"(?:Medication(?:s)?|Rx|Drug(?:s)?)[:\s]*([^\n;]+)",
-        "diagnosis": r"(?:Diagnosis|Condition|Medical Condition)[:\s]*([^\n]+)",
-        "complaint": r"(?:Chief Complaint|Reason for Visit)[:\s]*([^\n]+)"
-    }
-    for k, pat in patterns.items():
-        m = re.search(pat, text, re.I)
-        if m:
-            info[k] = m.group(1).strip()
+  try {
+    const res = await fetch('/upload', { method: 'POST', body: fd });
+    const data = await res.json();
 
-    # post processing
-    if "medications" in info:
-        info["medications"] = [m.strip() for m in re.split(r"[;,]", info["medications"]) if m.strip()]
-
-    if "allergies" in info:
-        info["allergies"] = [m.strip() for m in re.split(r"[;,]", info["allergies"]) if m.strip()]
-
-    if "gender" not in info or not info["gender"]:
-        pron = re.search(r"\b(he|she)\b", text, re.I)
-        if pron:
-            info["gender"] = "male" if pron.group(1).lower() == "he" else "female"
-
-    return info
+if (data.error) {
+  statusEl.textContent = '❌ ' + data.error;
+  return;
+}
 
 
-def infer_gender_from_name(name: str) -> str:
-    if not name:
-        return ""
-    first = name.split()[0].lower()
-    female = {"jessica", "emily", "sarah", "olivia", "emma", "sophia", "isabella", "ava", "mia", "ella", "jess"}
-    male = {"mike", "michael", "john", "james", "robert", "william", "david", "daniel", "matthew", "joseph"}
-    if first in female: return "female"
-    if first in male: return "male"
-    return ""
+statusEl.textContent = '✅ Case ready. The AI has assumed the patient role.';
+fileUploaded = true;
+enableSessionControls();
 
+// Show Case Summary clearly
+if (data.case_summary) {
+  const formatted = data.case_summary
+    .replace(/^Case Summary:/i, "<b>Case Summary:</b> ")
+    .replace(/^Case Scenario:/i, "<b>Case Summary:</b> ");
+  addBubble('ai', formatted);
+} else {
+  addBubble('ai', '<b>Case Summary:</b> A patient has come to the pharmacy seeking advice.');
+}
 
-def clamp_turns():
-    if len(patient_state["turns"]) > MAX_TURNS:
-        patient_state["turns"] = patient_state["turns"][-MAX_TURNS:]
+// ✅ ADD REFERENCES IMMEDIATELY AFTER SUMMARY
+if (data.references) {
+  addBubble('ai', `<span style="font-size:0.9em;color:#ddd;">References: ${data.references}</span>`);
+}
 
+  } catch {
+    statusEl.textContent = '❌ Upload failed.';
+  }
+});
 
-def chat_once(msgs, **kwargs):
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=msgs,
-        **kwargs
-    )
-    return resp.choices[0].message.content.strip()
+/* ---------- TTS ---------- */
+function playVoice(text) {
+  if (isSpeaking) return;
+  isSpeaking = true;
+  fetch('/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text })
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.audio) { isSpeaking = false; locked = false; return; }
+      const audio = new Audio(d.audio);
 
+      micBtn.classList.remove('active');
+      micBtn.classList.add('speaking');
+      micBtn.textContent = '🎙️ Speaking...';
+      micBtn.style.background = 'linear-gradient(90deg, #ff8a00, #ff1744)';
+      audio.play();
 
-# -------------------- CORE ROUTES --------------------
+      audio.onended = () => {
+        isSpeaking = false;
+        locked = false;
+        micBtn.disabled = false;
 
-@app.route("/")
-def home():
-    return render_template("index.html")
+        micBtn.classList.remove('speaking');
+        micBtn.classList.add('active');
+        micBtn.textContent = '🎧 Listening...';
+        micBtn.style.background = 'linear-gradient(90deg, #ff1744, #ff9100)';
 
-
-# -------------------- Start Session (PATIENT SPEAKS FIRST) --------------------
-
-@app.route("/start-session", methods=["POST"])
-def start_session():
-    global case_context, patient_state
-
-    system_prompt = f"""
-You are the patient. Begin the OSCE conversation naturally.
-Say 1–2 sentences like:
-- "Hi, I’m not feeling well today."
-- "Hello… I had some questions about my medication."
-- "Hi… I’ve been having this issue."
-
-PERSONA: {case_context['persona']}
-FACTS: {case_context['facts']}
-BACKGROUND: {case_context['summary']}
-"""
-
-    greeting = chat_once(
-        [{"role": "system", "content": system_prompt}],
-        temperature=0.5,
-        max_tokens=60
-    )
-
-    patient_state["turns"] = [{"role": "assistant", "content": greeting}]
-
-    return jsonify({"greeting": greeting})
-
-
-# -------------------- Upload --------------------
-
-@app.route("/upload", methods=["POST"])
-def upload_case():
-    global case_context, patient_state
-
-    file = request.files.get("file")
-    if not file:
-        return jsonify({"error": "No file uploaded"}), 400
-
-    filename = secure_filename(file.filename)
-    path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
-    file.save(path)
-
-    text = extract_text(path)
-    if not text:
-        return jsonify({"error": "Could not read file"}), 400
-
-    facts = extract_case_info(text)
-    if "gender" not in facts or not facts["gender"]:
-        inferred = infer_gender_from_name(facts.get("name", ""))
-        if inferred:
-            facts["gender"] = inferred
-
-    summary = chat_once(
-        [
-            {"role": "system", "content": "Write a brief first-person patient background (1–2 sentences)."},
-            {"role": "user", "content": text}
-        ],
-        temperature=0.3
-    )
-
-    persona = chat_once(
-        [
-            {"role": "system", "content": "Describe the patient's tone in <=2 short lines."},
-            {"role": "user", "content": text}
-        ],
-        temperature=0.5
-    )
-
-    summary_prompt = [
-        {"role": "system", "content": "Extract a 1–2 sentence OSCE case summary."},
-        {"role": "user", "content": text}
-    ]
-
-    case_summary = chat_once(summary_prompt, temperature=0.3)
-
-    case_context = {
-        "raw": text,
-        "facts": facts,
-        "summary": summary,
-        "persona": persona,
-        "gender": (facts.get("gender") or "").lower()
-    }
-    patient_state = {"summary": "", "turns": []}
-
-    return jsonify({
-        "message": "Case uploaded successfully.",
-        "extracted": facts,
-        "summary": summary,
-        "persona": persona,
-        "case_summary": case_summary
+        if (sessionActive && recognition) recognition.start();
+      };
     })
+    .catch(() => { isSpeaking = false; locked = false; });
+}
+useDefaultCases = true;
+modeBtn.textContent = "Manual Upload";
+uploadBox.style.display = "none";
+dropdownContainer.style.display = "flex";
+statusEl.textContent = "📚 Default case mode activated. Select a category.";
 
+/* ---------- Ask ---------- */
+async function sendQuestion(text) {
+  if (!fileUploaded || locked) return;
+  const question = text?.trim();
+  if (!question) return;
 
-# -------------------- ASK --------------------
+  locked = true;
+  addBubble('user', question);
 
-@app.route("/ask", methods=["POST"])
-def ask():
-    global case_context, patient_state
+  try {
+    const res = await fetch('/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question })
+    });
+    const data = await res.json();
 
-    user_q = request.json.get("question", "").strip()
-    if not user_q:
-        return jsonify({"error": "No question"}), 400
-
-    turns_preview = patient_state["turns"][-6:]
-
-    system_prompt = f"""
-You are the patient in a pharmacy OSCE.
-Answer briefly, naturally, 1–2 sentences max.
-Stay in first-person only.
-
-PERSONA: {case_context['persona']}
-FACTS: {case_context['facts']}
-BACKGROUND: {case_context['summary']}
-"""
-
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(turns_preview)
-    messages.append({"role": "user", "content": user_q})
-
-    completion = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        temperature=0.4,
-        max_tokens=60
-    )
-    answer = completion.choices[0].message.content.strip()
-
-    patient_state["turns"].append({"role": "user", "content": user_q})
-    patient_state["turns"].append({"role": "assistant", "content": answer})
-    clamp_turns()
-
-    return jsonify({"answer": answer})
-
-
-# -------------------- TTS (WORKING NEW SDK VERSION) --------------------
-
-@app.route("/tts", methods=["POST"])
-def tts():
-    text = request.json.get("text", "").strip()
-    if not text:
-        return jsonify({"error": "No text provided"}), 400
-
-    gender = case_context.get("gender", "")
-    voice_choice = "alloy" if gender == "female" else "verse"
-
-    audio_filename = f"voice_{uuid.uuid4().hex}.mp3"
-    audio_path = os.path.join(app.config["UPLOAD_FOLDER"], audio_filename)
-
-    with client.audio.speech.with_streaming_response.create(
-        model="gpt-4o-mini-tts",
-        voice=voice_choice,
-        input=text
-    ) as r:
-        r.stream_to_file(audio_path)
-
-    return jsonify({"audio": f"/uploads/{audio_filename}", "ready": True})
-
-# -------------------- LIST CHAPTERS --------------------
-
-@app.route("/list-chapters")
-def list_chapters():
-    base_path = "Chapters"   # Make sure this folder is in the project root
-
-    if not os.path.exists(base_path):
-        return jsonify({"error": "Chapters folder not found"}), 404
-
-    result = {}
-
-    # Loop through items in the Chapters folder
-    for chapter in os.listdir(base_path):
-        chapter_path = os.path.join(base_path, chapter)
-
-        # Only accept folders (Chapter 1, Chapter 2, etc.)
-        if os.path.isdir(chapter_path):
-
-            files = []
-            for f in os.listdir(chapter_path):
-                if f.lower().endswith((".txt", ".pdf", ".docx")):
-                    files.append(f)
-
-            # Add to dictionary
-            result[chapter] = files
-
-    return jsonify(result)
-# -------------------- LOAD DEFAULT CASE --------------------
-
-@app.route("/load-default-case", methods=["POST"])
-def load_default_case():
-    global case_context, patient_state
-
-    data = request.get_json()
-    chapter = data.get("chapter")
-    filename = data.get("file")
-
-    if not chapter or not filename:
-        return jsonify({"error": "Invalid request"}), 400
-
-    full_path = os.path.join("Chapters", chapter, filename)
-
-    if not os.path.exists(full_path):
-        return jsonify({"error": "Case file not found"}), 404
-
-    # Read file content using your extract_text() function
-    try:
-        text = extract_text(full_path)
-    except:
-        return jsonify({"error": "Failed to read file"}), 500
-
-    # Extract structured facts
-    facts = extract_case_info(text)
-
-    # Infer gender if not present
-    if "gender" not in facts or not facts["gender"]:
-        inferred = infer_gender_from_name(facts.get("name", ""))
-        if inferred:
-            facts["gender"] = inferred
-
-    # Generate patient background
-    summary = chat_once(
-        [
-            {"role": "system", "content": "Write a brief first-person patient background (1–2 sentences)."},
-            {"role": "user", "content": text}
-        ],
-        temperature=0.3
-    )
-
-    # Tone/persona
-    persona = chat_once(
-        [
-            {"role": "system", "content": "Describe the patient's tone in <=2 short lines."},
-            {"role": "user", "content": text}
-        ],
-        temperature=0.5
-    )
-
-    # Case Summary
-    case_summary = chat_once(
-        [
-            {"role": "system", "content": "Extract a 1–2 sentence OSCE case summary."},
-            {"role": "user", "content": text}
-        ],
-        temperature=0.3
-    )
-
-    # Save context
-    case_context = {
-        "raw": text,
-        "facts": facts,
-        "summary": summary,
-        "persona": persona,
-        "gender": (facts.get("gender") or "").lower()
+    if (data.error) {
+      addBubble('ai', '(Error) ' + data.error);
+      locked = false;
+      return;
     }
-    patient_state = {"summary": "", "turns": []}
 
-    return jsonify({
-        "case_summary": case_summary,
-        "summary": summary,
-        "persona": persona,
-        "extracted": facts
-    })
+    addBubble('ai', data.answer);
+    playVoice(data.answer);
+  } catch {
+    addBubble('ai', '(Network error)');
+    locked = false;
+  }
+}
 
-@app.route("/auto-greet", methods=["POST"])
-def auto_greet():
-    global case_context, patient_state
+async function startPharmacySession() {
+  if (!fileUploaded || locked) return;
 
-    system_prompt = f"""
-You are the patient. Provide a simple greeting, 1 sentence.
-Examples:
-- "Hi, I'm here because I'm not feeling well today."
-- "Hello, I had some concerns about my medication."
-- "Hi, I’ve been having this issue and wanted to ask for advice."
+  if (recognition) {
+    recognition.stop();
+    recognition = null;
+  }
 
-PERSONA: {case_context['persona']}
-FACTS: {case_context['facts']}
-BACKGROUND: {case_context['summary']}
-"""
-
-    greeting = chat_once(
-        [{"role": "system", "content": system_prompt}],
-        temperature=0.5,
-        max_tokens=40
-    )
-
-    patient_state["turns"] = [{"role": "assistant", "content": greeting}]
-
-    return jsonify({"greeting": greeting})
+  locked = true;
+  sessionActive = true;
+  micBtn.disabled = true;
 
 
-@app.route("/uploads/<path:filename>")
-def serve_upload(filename):
-    return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
+
+  // --- Ask backend for patient opening statement ---
+  let greeting = null;
+  try {
+    const res = await fetch('/start-session', { method: 'POST' });
+    const data = await res.json();
+    greeting = data.greeting;
+  } catch {
+    addBubble('ai', '(Failed to start session)');
+    locked = false;
+    return;
+  }
+
+  // --- Show & speak patient greeting ---
+  if (greeting) {
+    addBubble('ai', greeting);
+    playVoice(greeting);
+  } else {
+    locked = false;
+    return;
+  }
+
+  // --- Prepare speech recognition (DO NOT START YET) ---
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    alert('Speech recognition not supported');
+    locked = false;
+    return;
+  }
+
+  recognition = new SpeechRecognition();
+  recognition.lang = 'en-US';
+  recognition.interimResults = true;
+  recognition.continuous = true;
+
+  recognition.onstart = () => {
+    micBtn.classList.add('active');
+    micBtn.textContent = '🎧 Listening...';
+    micBtn.style.background = 'linear-gradient(90deg, #ff1744, #ff9100)';
+  };
+
+  let buffer = "";
+  let silenceTimer = null;
+
+  recognition.onresult = (e) => {
+    if (locked) return;
+
+    let result = e.results[e.results.length - 1];
+    if (!result.isFinal) return;
+
+    buffer += " " + result[0].transcript.trim();
+
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => {
+      const finalText = buffer.trim();
+      if (finalText.length > 0) sendQuestion(finalText);
+      buffer = "";
+    }, 1200);
+  };
+
+  recognition.onend = () => {
+    if (sessionActive && !isSpeaking) recognition.start();
+  };
+
+  recognition.onerror = () => {
+    if (!sessionActive) stopPharmacySession();
+  };
+
+  // 🔑 IMPORTANT:
+  // recognition.start() is NOT called here.
+  // It will start AFTER the AI finishes speaking.
+}
+
+/* ---------- Stop ---------- */
+function stopPharmacySession() {
+  sessionActive = false;
+  locked = false;
+  if (recognition) recognition.stop();
+  micBtn.classList.remove('active', 'speaking');
+  micBtn.textContent = '🎙️ Start Pharmacy Session';
+  micBtn.style.background = 'linear-gradient(90deg, #000, #333)';
+}
+
+micBtn.addEventListener('click', () => {
+  if (!fileUploaded || locked) return;
+
+  if (!sessionActive) {
+    startPharmacySession();
+  } else {
+    stopPharmacySession();
+  }
+});
 
 
-# -------------------- Run --------------------
+/* ---------- Results ---------- */
+resultsBtn.addEventListener('click', async () => {
+  if (!fileUploaded) return;
 
-if __name__ == "__main__":
-    app.run(debug=True)
+  // If we already have cached results, show them immediately
+  if (caseResults) {
+    renderResults(caseResults);
+    return;
+  }
+
+  transcriptHTML = messages.innerHTML;
+  messages.innerHTML = '';
+  messages.style.background = 'var(--glass-strong)';
+  addBubble('ai', '📊 Generating performance analysis...');
+
+  try {
+    const res = await fetch('/results');
+    const data = await res.json();
+    if (data.error) {
+      addBubble('ai', '(Error) ' + data.error);
+      return;
+    }
+
+    // ✅ cache once per case
+    caseResults = data;
+    renderResults(data);
+
+  } catch {
+    addBubble('ai', '(Network error while fetching results)');
+  }
+});
+
+
+function renderBar(label, percent) {
+  return `
+    <div style="margin-bottom:10px;">
+      <div style="font-weight:600;margin-bottom:4px;">${label}
+        <span style="float:right;">${percent}%</span>
+      </div>
+      <div style="width:100%;background:#eee;border-radius:6px;overflow:hidden;height:10px;">
+        <div style="width:${percent}%;height:100%;background:#4aa3a3;border-radius:6px;"></div>
+      </div>
+    </div>
+  `;
+}
+
+
+
+
+function renderResults(data) {
+  const html = `
+    <div style="display:flex;justify-content:space-between;gap:32px;flex-wrap:wrap;margin-top:8px;position:relative;">
+<button id="backBtn"
+  style="position:absolute;top:-18px;left:-8px;
+  background:linear-gradient(135deg,#111,#444);
+  color:#fff;border:none;border-radius:10px;
+  padding:10px 18px;font-weight:700;font-size:1rem;
+  cursor:pointer;box-shadow:0 4px 10px rgba(0,0,0,.25);
+  transition:transform .2s ease;">
+  ← Back
+</button>
+
+      <div style="flex:1;min-width:280px;">
+        <div style="margin-bottom:8px;font-weight:600;">Strengths</div>
+        <ul style="list-style:disc;padding-left:20px;margin:0 0 14px 0;font-size:1rem;">
+          ${data.good.map(f => `<li>${f}</li>`).join('')}
+        </ul>
+        <div style="margin-bottom:8px;font-weight:600;">Areas for Improvement</div>
+        <ul style="list-style:disc;padding-left:20px;margin:0;font-size:1rem;">
+          ${data.improvement.map(f => `<li>${f}</li>`).join('')}
+        </ul>
+      </div>
+      <div style="flex:1;min-width:260px;">
+        <h3 style="margin-top:20px;">Interaction Analysis</h3>
+        ${renderBar('Listening', data.listening)}
+        ${renderBar('Empathy', data.empathy)}
+        ${renderBar('Communication', data.communication)}
+        ${renderBar('Problem-Solving', data.problem_solving)}
+      </div>
+    </div>
+  `;
+  messages.innerHTML = html;
+
+  document.getElementById('backBtn').addEventListener('click', () => {
+    messages.innerHTML = transcriptHTML;
+    scrollToBottom();
+  });
+}
+
+
+
+/* ---------- Reset Case ---------- */
+resetBtn.addEventListener('click', async () => {
+  stopPharmacySession();
+  await fetch('/reset-case', { method: 'POST' });
+  messages.innerHTML = '';
+  messages.style.background = 'var(--glass-strong)';
+  fileInput.value = '';
+  fileUploaded = false;
+  disableSessionControls();
+  statusEl.textContent = '📄 Please upload a file to begin.';
+  addBubble('ai', '🆕 New session started. Upload a case to begin.');
+});
+async function loadChapters() {
+    const res = await fetch("/list-chapters");
+    const data = await res.json();
+
+    const categoryDD = document.getElementById("caseCategory");
+    const caseDD = document.getElementById("caseList");
+
+    // Clear dropdowns
+    categoryDD.innerHTML = `<option disabled selected>Select Category</option>`;
+    caseDD.innerHTML = `<option disabled selected>Select Case</option>`;
+
+    // Populate Chapter Dropdown
+    Object.keys(data).forEach(chapter => {
+        const opt = document.createElement("option");
+        opt.value = chapter;
+        opt.textContent = chapter;
+        categoryDD.appendChild(opt);
+    });
+
+    // When category is selected → populate case list
+    categoryDD.addEventListener("change", () => {
+        const chapter = categoryDD.value;
+        const files = data[chapter];
+
+        caseDD.innerHTML = `<option disabled selected>Select Case</option>`;
+
+        files.forEach(file => {
+            const opt = document.createElement("option");
+            opt.value = file;
+            opt.textContent = file;
+            caseDD.appendChild(opt);
+        });
+    });
+}
+
+loadChapters();
+document.getElementById("caseList").addEventListener("change", async () => {
+    const chapter = document.getElementById("caseCategory").value;
+    const file = document.getElementById("caseList").value;
+
+    if (!chapter || !file) return;
+
+    statusEl.textContent = "📘 Loading case...";
+
+    const res = await fetch("/load-default-case", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapter, file })
+    });
+
+    const data = await res.json();
+
+    if (data.error) {
+        addBubble("ai", "❌ " + data.error);
+        return;
+    }
+
+    // Show Case Summary like manual upload does
+    const summaryText = data.case_summary
+        .replace(/^Case Summary:/i, "<b>Case Summary:</b> ");
+
+    addBubble("ai", summaryText);
+
+    // ✅ ADD THIS BLOCK
+    if (data.references && data.references.trim() !== "") {
+      addBubble(
+        "ai",
+        `<span style="font-size:0.9em;color:#ddd;">References: ${data.references}</span>`
+      );
+    }
+
+    fileUploaded = true;
+    enableSessionControls();
+
+    statusEl.textContent = "✅ Case loaded. AI is now the patient.";
+
+});
+
+/* ---------- Welcome ---------- */
+messages.style.background = 'var(--glass-strong)';
+addBubble('ai', 'Case Scenario: The patient presents for medication counseling.');
+
+
+</script>
+</body>
+</html>
